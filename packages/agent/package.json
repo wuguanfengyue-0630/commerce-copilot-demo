@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@commerce-copilot/application": "workspace:*",
-    "@commerce-copilot/contracts": "workspace:*"
+    "@commerce-copilot/contracts": "workspace:*",
+    "@commerce-copilot/domain": "workspace:*"
   }
 }
