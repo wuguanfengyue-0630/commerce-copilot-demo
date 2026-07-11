@@ -3,7 +3,9 @@ import type { CompanyId, ConversationId, ProposalId, StoreId, UserId } from "../
 import type { Money } from "../shared/money.ts";
 import { ACTION_PROPOSAL_STATUSES, type ActionProposalStatus } from "./action-status.ts";
 
-const ACTION_PROPOSAL_STATE = Symbol("ActionProposal.state");
+declare const actionProposalStateBrand: unique symbol;
+
+const issuedProposalStates = new WeakMap<object, ActionProposalStatus>();
 
 export interface AfterSaleRefundPayload {
   kind: "after_sale.refund";
@@ -41,7 +43,7 @@ type ActionProposalBase = Readonly<{
 }>;
 
 type ProposalStateSeal<Status extends ActionProposalStatus> = Readonly<{
-  [ACTION_PROPOSAL_STATE]: Status;
+  [actionProposalStateBrand]: Status;
 }>;
 
 export type PendingActionProposal = Readonly<
@@ -130,6 +132,12 @@ export class ActionTransitionError extends Error {
 }
 
 export function createActionProposal(input: ActionProposalInput): PendingActionProposal {
+  const createdAt = normalizeTimestamp(input.createdAt);
+  const expiresAt = normalizeTimestamp(input.expiresAt);
+  if (createdAt >= expiresAt) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
+
   const payload = Object.freeze({
     kind: input.payload.kind,
     orderId: input.payload.orderId,
@@ -148,8 +156,8 @@ export function createActionProposal(input: ActionProposalInput): PendingActionP
       conversationId: input.conversationId,
       payload,
       status: "pending_approval",
-      createdAt: toIsoTimestamp(input.createdAt),
-      expiresAt: toIsoTimestamp(input.expiresAt),
+      createdAt,
+      expiresAt,
     },
     "pending_approval",
   );
@@ -166,7 +174,11 @@ export function approveProposal(
     throw new ActionTransitionError("ACTION_NOT_PENDING_APPROVAL");
   }
 
-  const normalizedApprovedAt = toIsoTimestamp(approvedAt);
+  assertValidApprover(approver);
+  const normalizedApprovedAt = normalizeTimestamp(approvedAt);
+  if (normalizedApprovedAt < proposal.createdAt) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
   assertNotExpired(proposal, normalizedApprovedAt);
 
   const approvedBy = Object.freeze({
@@ -199,7 +211,13 @@ export function markExecuting(
   }
 
   assertValidApproval(proposal);
-  const normalizedExecutionStartedAt = toIsoTimestamp(executionStartedAt);
+  const normalizedExecutionStartedAt = normalizeTimestamp(executionStartedAt);
+  if (
+    normalizedExecutionStartedAt < proposal.createdAt ||
+    normalizedExecutionStartedAt < proposal.approval.approvedAt
+  ) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
   assertNotExpired(proposal, normalizedExecutionStartedAt);
 
   return sealProposal(
@@ -227,6 +245,7 @@ export function markExecuted(
     throw new ActionTransitionError("ACTION_NOT_EXECUTING");
   }
 
+  assertValidExecutionResult(executionResult, proposal.executionStartedAt);
   const frozenExecutionResult = Object.freeze({
     executionId: executionResult.executionId,
     executedAt: executionResult.executedAt,
@@ -260,28 +279,33 @@ function sealProposal<Status extends ActionProposalStatus, Snapshot extends { st
   snapshot: Snapshot,
   status: Status,
 ): Readonly<Snapshot & ProposalStateSeal<Status>> {
-  Object.defineProperty(snapshot, ACTION_PROPOSAL_STATE, {
-    value: status,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
+  const sealedSnapshot = Object.freeze(snapshot);
+  issuedProposalStates.set(sealedSnapshot, status);
 
-  return Object.freeze(snapshot) as Readonly<Snapshot & ProposalStateSeal<Status>>;
+  return sealedSnapshot as Readonly<Snapshot & ProposalStateSeal<Status>>;
 }
 
 function assertValidProposal(proposal: ActionProposal): void {
-  const stateDescriptor = Object.getOwnPropertyDescriptor(proposal, ACTION_PROPOSAL_STATE);
   const hasCanonicalStatus = ACTION_PROPOSAL_STATUSES.some((status) => status === proposal.status);
+  const issuedStatus = issuedProposalStates.get(proposal);
 
   if (
     !Object.isFrozen(proposal) ||
     !hasCanonicalStatus ||
-    stateDescriptor === undefined ||
-    stateDescriptor.value !== proposal.status ||
-    stateDescriptor.enumerable !== false ||
-    stateDescriptor.configurable !== false ||
-    stateDescriptor.writable !== false
+    issuedStatus === undefined ||
+    issuedStatus !== proposal.status
+  ) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
+}
+
+function assertValidApprover(approver: ApprovalActor): void {
+  if (
+    approver === null ||
+    approver === undefined ||
+    (approver.role !== "supervisor" && approver.role !== "admin") ||
+    typeof approver.userId !== "string" ||
+    approver.userId.trim().length === 0
   ) {
     throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
   }
@@ -313,6 +337,31 @@ function isCanonicalTimestamp(value: string): boolean {
     return toIsoTimestamp(value) === value;
   } catch {
     return false;
+  }
+}
+
+function normalizeTimestamp(value: Date | string): IsoTimestamp {
+  try {
+    return toIsoTimestamp(value);
+  } catch {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
+}
+
+function assertValidExecutionResult(
+  executionResult: ActionExecutionResult,
+  executionStartedAt: IsoTimestamp,
+): void {
+  if (
+    executionResult === null ||
+    executionResult === undefined ||
+    typeof executionResult.executionId !== "string" ||
+    executionResult.executionId.trim().length === 0 ||
+    typeof executionResult.executedAt !== "string" ||
+    !isCanonicalTimestamp(executionResult.executedAt) ||
+    executionResult.executedAt < executionStartedAt
+  ) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
   }
 }
 

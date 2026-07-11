@@ -83,6 +83,22 @@ describe("evaluateActionPolicy", () => {
     });
   });
 
+  it.each(["owner", ""])("fails closed for unknown runtime role %j", (runtimeRole) => {
+    expect(
+      evaluateActionPolicy({
+        actionKind: "after_sale.refund",
+        actorRole: runtimeRole as ActionPolicyRole,
+        rules: [enabledDemoRefundRule],
+      }),
+    ).toEqual({
+      allowed: false,
+      requiresApproval: true,
+      requiredRole: "supervisor",
+      riskLevel: "high",
+      reasons: ["ACTION_REQUIRES_SUPERVISOR_APPROVAL"],
+    });
+  });
+
   it("does not let the refund rule enable a different write action", () => {
     expect(
       evaluateActionPolicy({

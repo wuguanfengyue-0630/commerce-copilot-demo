@@ -19,6 +19,7 @@ import {
   approveProposal,
   createActionProposal,
   type ExecutedActionProposal,
+  type ExecutingActionProposal,
   markExecuted,
   markExecuting,
   type PendingActionProposal,
@@ -59,11 +60,14 @@ function executionResult(): ActionExecutionResult {
   });
 }
 
-function executedRefundProposal(): ExecutedActionProposal {
+function executingRefundProposal(): ExecutingActionProposal {
   const approved = approveProposal(refundProposal(), supervisor, fixedNow);
-  const executing = markExecuting(approved, "2026-07-11T01:00:01.000Z");
 
-  return markExecuted(executing, executionResult());
+  return markExecuting(approved, "2026-07-11T01:00:01.000Z");
+}
+
+function executedRefundProposal(): ExecutedActionProposal {
+  return markExecuted(executingRefundProposal(), executionResult());
 }
 
 function expectTransitionError(run: () => void, code: ActionTransitionErrorCode): void {
@@ -84,21 +88,34 @@ function expectTransitionError(run: () => void, code: ActionTransitionErrorCode)
   expect(capturedError?.message).toBe(code);
 }
 
-function copyRuntimeStateStamp(source: ActionProposal, target: object): void {
-  const stateSymbols = Object.getOwnPropertySymbols(source);
-  expect(stateSymbols).toHaveLength(1);
+function forgeApprovedByCopyingDescriptors(
+  proposal: PendingActionProposal,
+): ApprovedActionProposal {
+  const forgedProposal = {};
 
-  const stateSymbol = stateSymbols[0];
-  if (stateSymbol === undefined) {
-    throw new Error("Expected a runtime proposal state stamp");
+  for (const key of Reflect.ownKeys(proposal)) {
+    const descriptor = Object.getOwnPropertyDescriptor(proposal, key);
+    if (descriptor === undefined) {
+      throw new Error("Expected an own proposal property descriptor");
+    }
+
+    Object.defineProperty(forgedProposal, key, {
+      ...descriptor,
+      value: key === "status" || typeof key === "symbol" ? "approved" : descriptor.value,
+    });
   }
 
-  Object.defineProperty(target, stateSymbol, {
-    value: source.status,
-    enumerable: false,
+  Object.defineProperty(forgedProposal, "approval", {
+    value: Object.freeze({
+      approvedBy: Object.freeze({ ...supervisor }),
+      approvedAt: toIsoTimestamp(fixedNow),
+    }),
+    enumerable: true,
     configurable: false,
     writable: false,
   });
+
+  return Object.freeze(forgedProposal) as ApprovedActionProposal;
 }
 
 describe("action proposal state machine", () => {
@@ -136,18 +153,29 @@ describe("action proposal state machine", () => {
     expect(proposal.payload).not.toHaveProperty("connectorSecret");
   });
 
-  it("keeps its runtime state stamp out of enumeration, spread, and JSON", () => {
+  it.each([
+    {
+      createdAt: "2026-07-11T01:05:00.000Z",
+      expiresAt: "2026-07-11T01:05:00.000Z",
+    },
+    {
+      createdAt: "2026-07-11T01:05:01.000Z",
+      expiresAt: "2026-07-11T01:05:00.000Z",
+    },
+  ])("rejects proposal lifetime $createdAt to $expiresAt", ({ createdAt, expiresAt }) => {
+    expectTransitionError(
+      () => refundProposal({ createdAt, expiresAt }),
+      "ACTION_INVALID_PROPOSAL",
+    );
+  });
+
+  it("keeps authority out of own symbols, enumeration, spread, and JSON", () => {
     const proposal = refundProposal();
     const stateSymbols = Object.getOwnPropertySymbols(proposal);
     const spreadProposal = { ...proposal };
     const serializedProposal = JSON.stringify(proposal);
-    const stateSymbol = stateSymbols[0];
 
-    expect(stateSymbols).toHaveLength(1);
-    if (stateSymbol === undefined) {
-      throw new Error("Expected a runtime proposal state stamp");
-    }
-    expect(Object.getOwnPropertyDescriptor(proposal, stateSymbol)?.enumerable).toBe(false);
+    expect(stateSymbols).toHaveLength(0);
     expect(Object.getOwnPropertySymbols(spreadProposal)).toHaveLength(0);
     expect(serializedProposal).not.toContain("ActionProposal.state");
     expect(JSON.parse(serializedProposal)).not.toHaveProperty("stateStamp");
@@ -186,6 +214,45 @@ describe("action proposal state machine", () => {
     expectTransitionError(() => approveProposal(proposal, supervisor, fixedNow), "ACTION_EXPIRED");
   });
 
+  it("rejects approval before proposal creation", () => {
+    const proposal = refundProposal({
+      createdAt: "2026-07-11T01:00:00.000Z",
+      expiresAt: "2026-07-11T01:05:00.000Z",
+    });
+
+    expectTransitionError(
+      () => approveProposal(proposal, supervisor, "2026-07-11T00:59:59.000Z"),
+      "ACTION_INVALID_PROPOSAL",
+    );
+  });
+
+  it("allows approval at the proposal creation instant", () => {
+    const proposal = refundProposal({
+      createdAt: fixedNow,
+      expiresAt: "2026-07-11T01:05:00.000Z",
+    });
+
+    const approved = approveProposal(proposal, supervisor, fixedNow);
+
+    expect(approved.approval.approvedAt).toBe(fixedNow);
+  });
+
+  it.each([
+    Object.freeze({
+      userId: createUserId("agent-1"),
+      role: "agent" as ApprovalActor["role"],
+    }),
+    Object.freeze({
+      userId: " " as ApprovalActor["userId"],
+      role: "supervisor" as const,
+    }),
+  ])("rejects invalid approver evidence", (invalidApprover) => {
+    expectTransitionError(
+      () => approveProposal(refundProposal(), invalidApprover, fixedNow),
+      "ACTION_INVALID_PROPOSAL",
+    );
+  });
+
   it("cannot execute a pending refund proposal", () => {
     const proposal = refundProposal();
 
@@ -204,7 +271,7 @@ describe("action proposal state machine", () => {
     );
   });
 
-  it("rejects approved snapshots that lost their runtime stamp through spread or JSON", () => {
+  it("rejects approved snapshots without issued provenance after spread or JSON", () => {
     const approved = approveProposal(refundProposal(), supervisor, fixedNow);
     const spreadProposal = { ...approved } as ApprovedActionProposal;
     const plainProposal = JSON.parse(JSON.stringify(approved)) as ApprovedActionProposal;
@@ -221,29 +288,13 @@ describe("action proposal state machine", () => {
     );
   });
 
-  it("rejects sealed approved snapshots with invalid approval evidence", () => {
-    const approved = approveProposal(refundProposal(), supervisor, fixedNow);
-    const withoutApproval = { ...approved, approval: undefined };
-    const withAgentApproval = {
-      ...approved,
-      approval: Object.freeze({
-        ...approved.approval,
-        approvedBy: Object.freeze({ ...approved.approval.approvedBy, role: "agent" }),
-      }),
-    };
-    const withInvalidApprovalTime = {
-      ...approved,
-      approval: Object.freeze({ ...approved.approval, approvedAt: "not-a-timestamp" }),
-    };
+  it("rejects a fully frozen approved forgery with all reflected descriptors copied", () => {
+    const forgedProposal = forgeApprovedByCopyingDescriptors(refundProposal());
 
-    for (const invalidProposal of [withoutApproval, withAgentApproval, withInvalidApprovalTime]) {
-      copyRuntimeStateStamp(approved, invalidProposal);
-      Object.freeze(invalidProposal);
-      expectTransitionError(
-        () => markExecuting(invalidProposal as ApprovedActionProposal, "2026-07-11T01:00:01.000Z"),
-        "ACTION_INVALID_PROPOSAL",
-      );
-    }
+    expectTransitionError(
+      () => markExecuting(forgedProposal, "2026-07-11T01:00:01.000Z"),
+      "ACTION_INVALID_PROPOSAL",
+    );
   });
 
   it("starts an approved proposal without mutating the approved snapshot", () => {
@@ -259,6 +310,23 @@ describe("action proposal state machine", () => {
     expect(Object.isFrozen(executing)).toBe(true);
   });
 
+  it("rejects execution starting before approval", () => {
+    const approved = approveProposal(refundProposal(), supervisor, fixedNow);
+
+    expectTransitionError(
+      () => markExecuting(approved, "2026-07-11T00:59:59.000Z"),
+      "ACTION_INVALID_PROPOSAL",
+    );
+  });
+
+  it("allows execution to start at the approval instant", () => {
+    const approved = approveProposal(refundProposal(), supervisor, fixedNow);
+
+    const executing = markExecuting(approved, fixedNow);
+
+    expect(executing.executionStartedAt).toBe(fixedNow);
+  });
+
   it("records an immutable execution result", () => {
     const approved = approveProposal(refundProposal(), supervisor, fixedNow);
     const executing = markExecuting(approved, "2026-07-11T01:00:01.000Z");
@@ -270,6 +338,38 @@ describe("action proposal state machine", () => {
       executionResult: executionResult(),
     });
     expect(Object.isFrozen(executed.executionResult)).toBe(true);
+  });
+
+  it.each([
+    Object.freeze({
+      executionId: " ",
+      executedAt: toIsoTimestamp("2026-07-11T01:00:02.000Z"),
+    }),
+    Object.freeze({
+      executionId: "execution-before-start",
+      executedAt: toIsoTimestamp("2026-07-11T01:00:00.000Z"),
+    }),
+    Object.freeze({
+      executionId: "execution-non-canonical-time",
+      executedAt: "2026-07-11T09:00:02+08:00" as ActionExecutionResult["executedAt"],
+    }),
+  ])("rejects invalid execution result evidence", (invalidResult) => {
+    expectTransitionError(
+      () => markExecuted(executingRefundProposal(), invalidResult),
+      "ACTION_INVALID_PROPOSAL",
+    );
+  });
+
+  it("allows execution to complete at the start instant", () => {
+    const executing = executingRefundProposal();
+    const result = Object.freeze({
+      executionId: "execution-at-start",
+      executedAt: executing.executionStartedAt,
+    });
+
+    const executed = markExecuted(executing, result);
+
+    expect(executed.executionResult.executedAt).toBe(executing.executionStartedAt);
   });
 
   it("keeps a repeated execution idempotent", () => {

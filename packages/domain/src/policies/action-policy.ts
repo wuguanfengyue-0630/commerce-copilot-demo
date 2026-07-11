@@ -42,7 +42,7 @@ export function evaluateActionPolicy(input: ActionPolicyInput): PolicyEvaluation
     });
   }
 
-  if (input.actorRole === "agent") {
+  if (input.actorRole !== "supervisor" && input.actorRole !== "admin") {
     return createEvaluation({
       allowed: false,
       requiresApproval: true,
