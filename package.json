@@ -17,7 +17,7 @@
     "test:watch": "vitest --config vitest.workspace.ts",
     "test:e2e": "playwright test",
     "verify": "pnpm verify:workspace && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "verify:workspace": "node --test scripts/verify-workspace.test.mjs && node scripts/verify-workspace.mjs"
+    "verify:workspace": "node --test scripts/verify-workspace.test.mjs && node scripts/verify-workspace.mjs && node scripts/verify-package-imports.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
