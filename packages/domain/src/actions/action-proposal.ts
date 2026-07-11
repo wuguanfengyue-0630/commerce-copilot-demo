@@ -178,7 +178,7 @@ export function approveProposal(
   approver: ApprovalActor,
   approvedAt: Date | string,
 ): ApprovedActionProposal {
-  assertValidProposal(proposal);
+  assertIssuedActionProposal(proposal);
 
   if (proposal.status !== "pending_approval") {
     throw new ActionTransitionError("ACTION_NOT_PENDING_APPROVAL");
@@ -214,7 +214,7 @@ export function markExecuting(
   proposal: ActionProposal,
   executionStartedAt: Date | string,
 ): ExecutingActionProposal {
-  assertValidProposal(proposal);
+  assertIssuedActionProposal(proposal);
 
   if (proposal.status !== "approved") {
     throw new ActionTransitionError("ACTION_NOT_APPROVED");
@@ -245,7 +245,7 @@ export function markExecuted(
   proposal: ActionProposal,
   executionResult: ActionExecutionResult,
 ): ExecutedActionProposal {
-  assertValidProposal(proposal);
+  assertIssuedActionProposal(proposal);
 
   if (proposal.status === "executed") {
     return proposal;
@@ -295,7 +295,7 @@ function sealProposal<Status extends ActionProposalStatus, Snapshot extends { st
   return sealedSnapshot as Readonly<Snapshot & ProposalStateSeal<Status>>;
 }
 
-function assertValidProposal(proposal: ActionProposal): void {
+export function assertIssuedActionProposal(proposal: ActionProposal): void {
   const hasCanonicalStatus = ACTION_PROPOSAL_STATUSES.some((status) => status === proposal.status);
   const issuedStatus = issuedProposalStates.get(proposal);
 

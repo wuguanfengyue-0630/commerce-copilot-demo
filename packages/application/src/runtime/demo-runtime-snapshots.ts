@@ -3,6 +3,7 @@ import {
   type ActionProposal,
   type ApprovalActor,
   type AuditEvent,
+  assertIssuedActionProposal,
   createAuditEvent,
   createMoney,
   type IsoTimestamp,
@@ -113,6 +114,11 @@ export function snapshotSuggestion(
 }
 
 export function assertTrustedProposal(context: OperationContext, proposal: ActionProposal): void {
+  try {
+    assertIssuedActionProposal(proposal);
+  } catch {
+    throw new DemoRuntimeError("DEMO_RUNTIME_INVALID_RECORD");
+  }
   if (
     proposal.companyId !== context.companyId ||
     !Object.isFrozen(proposal) ||

@@ -26,6 +26,11 @@ import type {
   SuggestionGenerator,
 } from "../ports/suggestion-generator.ts";
 import { snapshotGroundedGenerationResult } from "./grounded-suggestion-result.ts";
+import {
+  snapshotConversationForGeneration,
+  snapshotOrderForGeneration,
+  snapshotPublishedKnowledgeForGeneration,
+} from "./trusted-generation-context.ts";
 
 const PROPOSAL_LIFETIME_MS = 30 * 60 * 1_000;
 
@@ -152,20 +157,30 @@ async function loadConversation(
   if (conversation === null) {
     throw new GenerateSuggestionError("GENERATE_SUGGESTION_CONVERSATION_NOT_FOUND");
   }
-  return conversation;
+  try {
+    return snapshotConversationForGeneration(conversation);
+  } catch {
+    throw new GenerateSuggestionError("GENERATE_SUGGESTION_SCOPE_MISMATCH");
+  }
 }
 
 async function fetchLiveOrder(
   dependencies: CreateGenerateSuggestionDependencies,
   command: GenerateSuggestionCommand,
 ): Promise<OrderSnapshot> {
+  let order: OrderSnapshot;
   try {
-    return await dependencies.commerceConnector.getOrder({
+    order = await dependencies.commerceConnector.getOrder({
       storeId: command.storeId,
       orderId: command.orderId,
     });
   } catch {
     throw new GenerateSuggestionError("GENERATE_SUGGESTION_CONNECTOR_FAILED");
+  }
+  try {
+    return snapshotOrderForGeneration(order);
+  } catch {
+    throw new GenerateSuggestionError("GENERATE_SUGGESTION_ORDER_SCOPE_MISMATCH");
   }
 }
 
@@ -184,24 +199,10 @@ async function searchPublishedKnowledge(
       query: "damaged_item",
       evaluatedAt,
     });
+    return snapshotPublishedKnowledgeForGeneration(searchResults, command.companyId, evaluatedAt);
   } catch {
     throw new GenerateSuggestionError("GENERATE_SUGGESTION_KNOWLEDGE_FAILED");
   }
-
-  if (!Array.isArray(searchResults)) {
-    throw new GenerateSuggestionError("GENERATE_SUGGESTION_KNOWLEDGE_FAILED");
-  }
-  return Object.freeze(
-    searchResults.filter(
-      (evidence) =>
-        evidence !== null &&
-        evidence !== undefined &&
-        evidence.companyId === command.companyId &&
-        evidence.status === "published" &&
-        evidence.publishedAt <= evaluatedAt &&
-        (evidence.expiresAt === undefined || evidence.expiresAt > evaluatedAt),
-    ),
-  );
 }
 
 async function generateSuggestion(
@@ -261,7 +262,7 @@ function evaluateAndIssueProposal(
 
   try {
     return createActionProposal({
-      proposalId: createProposalId(`proposal-${command.correlationId}`),
+      proposalId: createProposalId(`proposal-${createWorkflowScopeId(command)}`),
       companyId: command.companyId,
       storeId: command.storeId,
       conversationId: command.conversationId,
@@ -280,7 +281,7 @@ function createSuggestionRecord(
   createdAt: SuggestionRecord["createdAt"],
 ): SuggestionRecord {
   const base = {
-    suggestionId: createSuggestionId(`suggestion-${command.correlationId}`),
+    suggestionId: createSuggestionId(`suggestion-${createWorkflowScopeId(command)}`),
     companyId: command.companyId,
     storeId: command.storeId,
     conversationId: command.conversationId,
@@ -326,13 +327,20 @@ async function persistWorkflow(
       if (retrievedKnowledge) {
         await repositories.auditEvents.append(
           context,
-          createWorkflowAudit(context, occurredAt, "01-knowledge-retrieved", "knowledge.retrieved"),
+          createWorkflowAudit(
+            context,
+            suggestion.conversationId,
+            occurredAt,
+            "01-knowledge-retrieved",
+            "knowledge.retrieved",
+          ),
         );
       }
       await repositories.auditEvents.append(
         context,
         createWorkflowAudit(
           context,
+          suggestion.conversationId,
           occurredAt,
           "02-suggestion-generated",
           "agent.suggestion_generated",
@@ -341,7 +349,13 @@ async function persistWorkflow(
       if (proposal !== undefined) {
         await repositories.auditEvents.append(
           context,
-          createWorkflowAudit(context, occurredAt, "03-action-proposed", "action.proposed"),
+          createWorkflowAudit(
+            context,
+            suggestion.conversationId,
+            occurredAt,
+            "03-action-proposed",
+            "action.proposed",
+          ),
         );
       }
 
@@ -377,18 +391,31 @@ async function persistWorkflow(
 
 function createWorkflowAudit(
   context: OperationContext,
+  conversationId: SuggestionRecord["conversationId"],
   occurredAt: SuggestionRecord["createdAt"],
   suffix: string,
   eventType: Parameters<typeof createAuditEvent>[0]["eventType"],
 ) {
   return createAuditEvent({
-    auditEventId: createAuditEventId(`audit-${context.correlationId}-${suffix}`),
+    auditEventId: createAuditEventId(
+      `audit-${createWorkflowScopeId({ ...context, conversationId })}|${suffix}`,
+    ),
     companyId: context.companyId,
     correlationId: context.correlationId,
     causationId: context.causationId,
     eventType,
     occurredAt,
   });
+}
+
+function createWorkflowScopeId(scope: {
+  readonly companyId: string;
+  readonly conversationId: string;
+  readonly correlationId: string;
+}): string {
+  return [scope.companyId, scope.conversationId, scope.correlationId]
+    .map((component) => `${component.length}:${component}`)
+    .join("|");
 }
 
 function assertConversationScope(

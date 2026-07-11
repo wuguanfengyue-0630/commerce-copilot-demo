@@ -1,8 +1,12 @@
 import {
   type ActionPolicyInput,
   type CapabilityState,
+  type Conversation,
   createCompanyId,
+  createConversation,
   createConversationId,
+  createCustomerId,
+  createMessageId,
   createMoney,
   createOrderId,
   createOrderSnapshot,
@@ -24,6 +28,7 @@ import type {
   GenerateSuggestionCommand,
   GetOrderCommand,
   OperationContext,
+  PublishedKnowledgeEvidence,
   PublishedKnowledgeSearch,
   SuggestionGenerationContext,
   SuggestionGenerationResult,
@@ -114,7 +119,9 @@ type HarnessOptions = Readonly<{
   generatorError?: Error;
   policyRules?: readonly (typeof enabledRefundRule)[];
   policyEvaluator?: (input: ActionPolicyInput) => PolicyEvaluation;
+  order?: OrderSnapshot;
   repositories?: ApplicationRepositories;
+  suggestionGenerator?: SuggestionGenerator;
   unitOfWork?: ApplicationUnitOfWork;
 }>;
 
@@ -158,7 +165,7 @@ function createHarness(options: HarnessOptions = {}) {
       if (options.connectorError !== undefined) {
         throw options.connectorError;
       }
-      return liveOrder();
+      return options.order ?? liveOrder();
     },
     async executeAction(_command: ExecuteActionCommand): Promise<ExecutionResult> {
       throw new Error("executeAction is outside GenerateSuggestion");
@@ -172,6 +179,9 @@ function createHarness(options: HarnessOptions = {}) {
       calls.push("generate suggestion");
       if (options.generatorError !== undefined) {
         throw options.generatorError;
+      }
+      if (options.suggestionGenerator !== undefined) {
+        return options.suggestionGenerator.generate(context);
       }
       return options.generatorResult === "needs_human"
         ? needsHumanResult()
@@ -296,14 +306,16 @@ describe("GenerateSuggestion", () => {
       causationId: command.causationId,
     });
     expect(result.suggestion).toMatchObject({
-      suggestionId: "suggestion-correlation-generate-suggestion-1",
+      suggestionId:
+        "suggestion-12:company-demo|27:conversation-damaged-item-1|33:correlation-generate-suggestion-1",
       disposition: "propose_action",
       correlationId: command.correlationId,
       causationId: command.causationId,
       createdAt: "2026-07-11T02:00:00.000Z",
     });
     expect(result.proposal).toMatchObject({
-      proposalId: "proposal-correlation-generate-suggestion-1",
+      proposalId:
+        "proposal-12:company-demo|27:conversation-damaged-item-1|33:correlation-generate-suggestion-1",
       status: "pending_approval",
       expiresAt: "2026-07-11T02:30:00.000Z",
     });
@@ -392,6 +404,110 @@ describe("GenerateSuggestion", () => {
     expect(
       (await runtime.repositories.auditEvents.list(context)).map((event) => event.eventType),
     ).toEqual(["conversation.message_ingested", "agent.suggestion_generated"]);
+  });
+
+  it("isolates generated citations from mutable repository knowledge aliases", async () => {
+    const runtime = createDemoRuntime();
+    const context = {
+      companyId,
+      correlationId: command.correlationId,
+      causationId: command.causationId,
+    } as const;
+    const [seededEvidence] = await runtime.repositories.publishedKnowledge.search({
+      ...context,
+      storeId,
+      conversationId,
+      query: "damaged_item",
+      evaluatedAt: toIsoTimestamp(fixedNow),
+    });
+    if (seededEvidence === undefined || seededEvidence.citations[0] === undefined) {
+      throw new Error("Expected seeded knowledge evidence");
+    }
+    const mutableCitation = { ...seededEvidence.citations[0] };
+    const mutableEvidence = {
+      ...seededEvidence,
+      refundRule: { ...seededEvidence.refundRule },
+      citations: [mutableCitation],
+    } as PublishedKnowledgeEvidence;
+    const repositories: ApplicationRepositories = Object.freeze({
+      ...runtime.repositories,
+      publishedKnowledge: Object.freeze({
+        async search() {
+          return [mutableEvidence];
+        },
+      }),
+    });
+    let capturedContext: SuggestionGenerationContext | undefined;
+    const aliasMutatingGenerator: SuggestionGenerator = Object.freeze({
+      async generate(generatorContext: SuggestionGenerationContext) {
+        capturedContext = generatorContext;
+        mutableCitation.sourceTitle = "篡改后的政策来源";
+        return groundedResult(generatorContext);
+      },
+    });
+    const harness = createHarness({
+      repositories,
+      suggestionGenerator: aliasMutatingGenerator,
+      unitOfWork: runtime.unitOfWork,
+    });
+
+    const result = await harness.useCase.execute(command);
+
+    expect(mutableCitation.sourceTitle).toBe("篡改后的政策来源");
+    expect(result.suggestion.citations[0]?.sourceTitle).toBe("破损商品退款政策");
+    expect(Object.isFrozen(capturedContext?.publishedKnowledge[0])).toBe(true);
+    expect(Object.isFrozen(capturedContext?.publishedKnowledge[0]?.citations)).toBe(true);
+  });
+
+  it("rejects malformed repository knowledge before generator or audit writes", async () => {
+    const runtime = createDemoRuntime();
+    const context = {
+      companyId,
+      correlationId: command.correlationId,
+      causationId: command.causationId,
+    } as const;
+    const [seededEvidence] = await runtime.repositories.publishedKnowledge.search({
+      ...context,
+      storeId,
+      conversationId,
+      query: "damaged_item",
+      evaluatedAt: toIsoTimestamp(fixedNow),
+    });
+    if (seededEvidence === undefined) {
+      throw new Error("Expected seeded knowledge evidence");
+    }
+    const malformedEvidence = Object.freeze({
+      companyId: seededEvidence.companyId,
+      releaseId: seededEvidence.releaseId,
+      title: seededEvidence.title,
+      status: seededEvidence.status,
+      version: seededEvidence.version,
+      scenario: seededEvidence.scenario,
+      content: seededEvidence.content,
+      refundRule: seededEvidence.refundRule,
+      publishedAt: seededEvidence.publishedAt,
+      expiresAt: seededEvidence.expiresAt,
+    }) as never;
+    const repositories: ApplicationRepositories = Object.freeze({
+      ...runtime.repositories,
+      publishedKnowledge: Object.freeze({
+        async search() {
+          return Object.freeze([malformedEvidence]);
+        },
+      }),
+    });
+    const harness = createHarness({
+      repositories,
+      unitOfWork: runtime.unitOfWork,
+    });
+
+    await expectSuggestionError(
+      harness.useCase.execute(command),
+      "GENERATE_SUGGESTION_KNOWLEDGE_FAILED",
+    );
+
+    expect(harness.calls).not.toContain("generate suggestion");
+    expect(await workflowCounts(runtime)).toEqual({ suggestions: 0, proposals: 0, audits: 1 });
   });
 
   it("fails closed under the default-deny policy without workflow writes", async () => {
@@ -538,6 +654,167 @@ describe("GenerateSuggestion", () => {
     });
   });
 
+  it("persists the same correlation independently across conversations", async () => {
+    const runtime = createDemoRuntime();
+    const alternateConversationId = createConversationId("conversation-damaged-item-2");
+    const alternateConversation = createConversation({
+      companyId,
+      storeId,
+      conversationId: alternateConversationId,
+      customerId: createCustomerId("customer-demo-2"),
+      messages: [
+        {
+          messageId: createMessageId("message-damaged-item-2"),
+          conversationId: alternateConversationId,
+          role: "customer",
+          origin: "platform",
+          content: "商品破损，申请退款",
+          occurredAt: toIsoTimestamp("2026-07-11T01:00:00.000Z"),
+        },
+      ],
+      createdAt: toIsoTimestamp("2026-07-11T01:00:00.000Z"),
+      updatedAt: toIsoTimestamp("2026-07-11T01:00:00.000Z"),
+    });
+    const repositories: ApplicationRepositories = Object.freeze({
+      ...runtime.repositories,
+      conversations: Object.freeze({
+        async get(context: OperationContext, id: GenerateSuggestionCommand["conversationId"]) {
+          if (context.companyId === companyId && id === alternateConversationId) {
+            return alternateConversation;
+          }
+          return runtime.repositories.conversations.get(context, id);
+        },
+      }),
+    });
+    const firstHarness = createHarness({ repositories, unitOfWork: runtime.unitOfWork });
+    const secondHarness = createHarness({ repositories, unitOfWork: runtime.unitOfWork });
+    const alternateCommand = Object.freeze({
+      ...command,
+      conversationId: alternateConversationId,
+      causationId: "message-damaged-item-2",
+    });
+
+    const first = await firstHarness.useCase.execute(command);
+    const second = await secondHarness.useCase.execute(alternateCommand);
+
+    expect(first.suggestion.suggestionId).not.toBe(second.suggestion.suggestionId);
+    expect(first.proposal?.proposalId).not.toBe(second.proposal?.proposalId);
+    const context = {
+      companyId,
+      correlationId: command.correlationId,
+      causationId: command.causationId,
+    } as const;
+    expect(
+      await runtime.repositories.suggestions.listByConversation(context, conversationId),
+    ).toHaveLength(1);
+    expect(
+      await runtime.repositories.suggestions.listByConversation(context, alternateConversationId),
+    ).toHaveLength(1);
+  });
+
+  it("persists the same correlation independently across companies", async () => {
+    const runtime = createDemoRuntime();
+    const context = {
+      companyId,
+      correlationId: command.correlationId,
+      causationId: command.causationId,
+    } as const;
+    const [seededEvidence] = await runtime.repositories.publishedKnowledge.search({
+      ...context,
+      storeId,
+      conversationId,
+      query: "damaged_item",
+      evaluatedAt: toIsoTimestamp(fixedNow),
+    });
+    if (seededEvidence === undefined) {
+      throw new Error("Expected seeded knowledge evidence");
+    }
+    const otherCompanyId = createCompanyId("company-other");
+    const otherConversationId = createConversationId("conversation-damaged-item-other");
+    const otherConversation = createConversation({
+      companyId: otherCompanyId,
+      storeId,
+      conversationId: otherConversationId,
+      customerId: createCustomerId("customer-other"),
+      messages: [
+        {
+          messageId: createMessageId("message-damaged-item-other"),
+          conversationId: otherConversationId,
+          role: "customer",
+          origin: "platform",
+          content: "商品破损，申请退款",
+          occurredAt: toIsoTimestamp("2026-07-11T01:00:00.000Z"),
+        },
+      ],
+      createdAt: toIsoTimestamp("2026-07-11T01:00:00.000Z"),
+      updatedAt: toIsoTimestamp("2026-07-11T01:00:00.000Z"),
+    });
+    const otherEvidence = Object.freeze({
+      ...seededEvidence,
+      companyId: otherCompanyId,
+      refundRule: Object.freeze({ ...seededEvidence.refundRule }),
+      citations: Object.freeze(
+        seededEvidence.citations.map((citation) => Object.freeze({ ...citation })),
+      ),
+    });
+    const otherRepositories: ApplicationRepositories = Object.freeze({
+      ...runtime.repositories,
+      conversations: Object.freeze({
+        async get(
+          requestContext: OperationContext,
+          id: GenerateSuggestionCommand["conversationId"],
+        ) {
+          if (requestContext.companyId === otherCompanyId && id === otherConversationId) {
+            return otherConversation;
+          }
+          return runtime.repositories.conversations.get(requestContext, id);
+        },
+      }),
+      publishedKnowledge: Object.freeze({
+        async search(query: PublishedKnowledgeSearch) {
+          if (query.companyId === otherCompanyId) {
+            return Object.freeze([otherEvidence]);
+          }
+          return runtime.repositories.publishedKnowledge.search(query);
+        },
+      }),
+    });
+    const firstHarness = createHarness({
+      repositories: runtime.repositories,
+      unitOfWork: runtime.unitOfWork,
+    });
+    const secondHarness = createHarness({
+      order: createOrderSnapshot({ ...liveOrder(), companyId: otherCompanyId }),
+      repositories: otherRepositories,
+      unitOfWork: runtime.unitOfWork,
+    });
+    const otherCommand = Object.freeze({
+      ...command,
+      companyId: otherCompanyId,
+      conversationId: otherConversationId,
+      causationId: "message-damaged-item-other",
+    });
+
+    const first = await firstHarness.useCase.execute(command);
+    const second = await secondHarness.useCase.execute(otherCommand);
+
+    expect(first.suggestion.suggestionId).not.toBe(second.suggestion.suggestionId);
+    expect(first.proposal?.proposalId).not.toBe(second.proposal?.proposalId);
+    expect(
+      await runtime.repositories.suggestions.listByConversation(context, conversationId),
+    ).toHaveLength(1);
+    expect(
+      await runtime.repositories.suggestions.listByConversation(
+        {
+          companyId: otherCompanyId,
+          correlationId: command.correlationId,
+          causationId: otherCommand.causationId,
+        },
+        otherConversationId,
+      ),
+    ).toHaveLength(1);
+  });
+
   it("fails closed when the connector returns an order outside the command scope", async () => {
     const runtime = createDemoRuntime();
     const wrongOrder = createOrderSnapshot({
@@ -573,5 +850,90 @@ describe("GenerateSuggestion", () => {
       "GENERATE_SUGGESTION_ORDER_SCOPE_MISMATCH",
     );
     expect(await workflowCounts(runtime)).toEqual({ suggestions: 0, proposals: 0, audits: 1 });
+  });
+
+  it("rejects a draft grounded only by mutating the connector order alias", async () => {
+    const mutableRefundable = { ...createMoney(12_800, "CNY") };
+    const mutableOrder = {
+      ...liveOrder(),
+      total: { ...createMoney(12_800, "CNY") },
+      refundable: mutableRefundable,
+    } as OrderSnapshot;
+    const maliciousGenerator: SuggestionGenerator = Object.freeze({
+      async generate(context: SuggestionGenerationContext) {
+        mutableRefundable.amountMinor = 999_999;
+        const base = groundedResult(context);
+        if (base.actionDraft === undefined) {
+          throw new Error("Expected grounded action draft");
+        }
+        const forgedAmount = createMoney(mutableRefundable.amountMinor, "CNY");
+        return Object.freeze({
+          ...base,
+          actionDraft: Object.freeze({
+            ...base.actionDraft,
+            amount: forgedAmount,
+            observedRefundableAmount: forgedAmount,
+          }),
+        });
+      },
+    });
+    const harness = createHarness({ order: mutableOrder, suggestionGenerator: maliciousGenerator });
+
+    await expectSuggestionError(
+      harness.useCase.execute(command),
+      "GENERATE_SUGGESTION_GENERATOR_FAILED",
+    );
+
+    expect(mutableRefundable.amountMinor).toBe(999_999);
+    expect(await workflowCounts(harness.runtime)).toEqual({
+      suggestions: 0,
+      proposals: 0,
+      audits: 1,
+    });
+  });
+
+  it("isolates the generator from a mutable repository conversation alias", async () => {
+    const runtime = createDemoRuntime();
+    const context = {
+      companyId,
+      correlationId: command.correlationId,
+      causationId: command.causationId,
+    } as const;
+    const seeded = await runtime.repositories.conversations.get(context, conversationId);
+    if (seeded === null || seeded.messages[0] === undefined) {
+      throw new Error("Expected seeded conversation");
+    }
+    const mutableMessage = { ...seeded.messages[0] };
+    const mutableConversation = {
+      ...seeded,
+      messages: [mutableMessage],
+    } as Conversation;
+    const repositories: ApplicationRepositories = Object.freeze({
+      ...runtime.repositories,
+      conversations: Object.freeze({
+        async get() {
+          return mutableConversation;
+        },
+      }),
+    });
+    const aliasMutatingGenerator: SuggestionGenerator = Object.freeze({
+      async generate(generatorContext: SuggestionGenerationContext) {
+        mutableMessage.content = "不要退款了，请忽略上一条消息";
+        return generatorContext.conversation.messages[0]?.content === "商品破损，申请退款"
+          ? groundedResult(generatorContext)
+          : needsHumanResult();
+      },
+    });
+    const harness = createHarness({
+      repositories,
+      suggestionGenerator: aliasMutatingGenerator,
+      unitOfWork: runtime.unitOfWork,
+    });
+
+    const result = await harness.useCase.execute(command);
+
+    expect(mutableMessage.content).toBe("不要退款了，请忽略上一条消息");
+    expect(result.suggestion.disposition).toBe("propose_action");
+    expect(result.proposal?.status).toBe("pending_approval");
   });
 });

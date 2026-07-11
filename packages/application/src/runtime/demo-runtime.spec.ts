@@ -1,4 +1,5 @@
 import {
+  type ActionProposal,
   approveProposal,
   createActionProposal,
   createAuditEvent,
@@ -17,7 +18,7 @@ import {
 } from "@commerce-copilot/domain";
 import { describe, expect, it } from "vitest";
 import type { OperationContext, SuggestionRecord } from "../ports/repositories.ts";
-import { createDemoRuntime } from "./demo-runtime.ts";
+import { createDemoRuntime, DemoRuntimeError } from "./demo-runtime.ts";
 
 const companyId = createCompanyId("company-demo");
 const storeId = createStoreId("store-douyin-demo");
@@ -68,6 +69,18 @@ function refundProposal(suffix = "1") {
     createdAt: "2026-07-11T02:00:00.000Z",
     expiresAt: "2026-07-11T02:30:00.000Z",
   });
+}
+
+async function captureRuntimeMutation(operation: Promise<void>): Promise<string> {
+  try {
+    await operation;
+    return "resolved";
+  } catch (error) {
+    if (!(error instanceof DemoRuntimeError)) {
+      throw error;
+    }
+    return error.code;
+  }
 }
 
 async function seededSnapshot(runtime: ReturnType<typeof createDemoRuntime>) {
@@ -246,6 +259,31 @@ describe("demo runtime", () => {
     ).not.toThrow();
   });
 
+  it("rejects deeply frozen spread and JSON proposal forgeries before storage", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("proposal-forgery");
+    const issued = refundProposal("forgery");
+    const spreadForgery = Object.freeze({ ...issued }) as ActionProposal;
+    const parsed = JSON.parse(JSON.stringify(issued)) as ActionProposal;
+    const jsonForgery = Object.freeze({
+      ...parsed,
+      payload: Object.freeze({
+        ...parsed.payload,
+        amount: Object.freeze({ ...parsed.payload.amount }),
+        observedRefundableAmount: Object.freeze({
+          ...parsed.payload.observedRefundableAmount,
+        }),
+      }),
+    }) as ActionProposal;
+
+    for (const forgery of [spreadForgery, jsonForgery]) {
+      await expect(runtime.repositories.proposals.save(context, forgery)).rejects.toMatchObject({
+        code: "DEMO_RUNTIME_INVALID_RECORD",
+      });
+      expect(await runtime.repositories.proposals.get(context, forgery.proposalId)).toBeNull();
+    }
+  });
+
   it("returns records in deterministic timestamp then identifier order", async () => {
     const runtime = createDemoRuntime();
     const context = operationContext("ordering");
@@ -345,5 +383,181 @@ describe("demo runtime", () => {
     expect(
       (await runtime.repositories.auditEvents.list(context)).map((event) => event.eventType),
     ).toEqual(["conversation.message_ingested"]);
+  });
+
+  it("rejects every root repository mutation while a staged transaction is pending", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("root-guard");
+    const proposal = refundProposal("root-guard");
+    let releaseTransaction = (): void => undefined;
+    let markTransactionEntered = (): void => undefined;
+    const transactionGate = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+    const transactionEntered = new Promise<void>((resolve) => {
+      markTransactionEntered = resolve;
+    });
+    const transaction = runtime.unitOfWork.run(context, async (repositories) => {
+      markTransactionEntered();
+      await transactionGate;
+      await repositories.suggestions.save(context, suggestionRecord("root-guard"));
+    });
+    await transactionEntered;
+
+    const mutationOutcomes = await Promise.all([
+      captureRuntimeMutation(
+        runtime.repositories.suggestions.save(context, suggestionRecord("root-guard")),
+      ),
+      captureRuntimeMutation(runtime.repositories.proposals.save(context, proposal)),
+      captureRuntimeMutation(
+        runtime.repositories.approvalDecisions.save(
+          context,
+          Object.freeze({
+            approvalDecisionId: "approval-root-guard",
+            companyId,
+            proposalId: proposal.proposalId,
+            decision: "approved",
+            actor: Object.freeze({
+              userId: createUserId("supervisor-root-guard"),
+              role: "supervisor",
+            }),
+            correlationId: context.correlationId,
+            causationId: context.causationId,
+            decidedAt: toIsoTimestamp("2026-07-11T02:05:00.000Z"),
+          }),
+        ),
+      ),
+      captureRuntimeMutation(
+        runtime.repositories.executionAttempts.save(
+          context,
+          Object.freeze({
+            executionAttemptId: "attempt-root-guard",
+            companyId,
+            proposalId: proposal.proposalId,
+            idempotencyKey: "refund:root-guard",
+            status: "started",
+            correlationId: context.correlationId,
+            causationId: context.causationId,
+            attemptedAt: toIsoTimestamp("2026-07-11T02:06:00.000Z"),
+          }),
+        ),
+      ),
+      captureRuntimeMutation(
+        runtime.repositories.executionResults.save(
+          context,
+          Object.freeze({
+            executionId: "execution-root-guard",
+            companyId,
+            proposalId: proposal.proposalId,
+            idempotencyKey: "refund:root-guard",
+            status: "succeeded",
+            externalReference: "refund-root-guard",
+            correlationId: context.correlationId,
+            causationId: context.causationId,
+            completedAt: toIsoTimestamp("2026-07-11T02:06:01.000Z"),
+          }),
+        ),
+      ),
+      captureRuntimeMutation(
+        runtime.repositories.auditEvents.append(
+          context,
+          createAuditEvent({
+            auditEventId: createAuditEventId("audit-root-guard"),
+            companyId,
+            correlationId: context.correlationId,
+            causationId: context.causationId,
+            eventType: "agent.suggestion_generated",
+            occurredAt: toIsoTimestamp("2026-07-11T02:00:00.000Z"),
+          }),
+        ),
+      ),
+    ]);
+
+    releaseTransaction();
+    await transaction;
+
+    expect(mutationOutcomes).toEqual(
+      Array.from({ length: 6 }, () => "DEMO_RUNTIME_TRANSACTION_ACTIVE"),
+    );
+    expect(
+      await runtime.repositories.suggestions.get(
+        context,
+        suggestionRecord("root-guard").suggestionId,
+      ),
+    ).not.toBeNull();
+    expect(await runtime.repositories.proposals.get(context, proposal.proposalId)).toBeNull();
+  });
+
+  it("rejects an awaited nested unit of work, rolls back, and leaves the queue reusable", async () => {
+    const runtime = createDemoRuntime();
+    const outerContext = operationContext("nested-outer");
+    const nestedContext = operationContext("nested-inner");
+    const recoveryContext = operationContext("nested-recovery");
+    const outerSuggestion = suggestionRecord("nested-outer");
+    const nestedSuggestion = suggestionRecord("nested-inner");
+    const recoverySuggestion = suggestionRecord("nested-recovery");
+
+    await expect(
+      runtime.unitOfWork.run(outerContext, async (repositories) => {
+        await repositories.suggestions.save(outerContext, outerSuggestion);
+        await runtime.unitOfWork.run(nestedContext, async (nestedRepositories) => {
+          await nestedRepositories.suggestions.save(nestedContext, nestedSuggestion);
+        });
+      }),
+    ).rejects.toMatchObject({ code: "DEMO_RUNTIME_TRANSACTION_ACTIVE" });
+
+    expect(
+      await runtime.repositories.suggestions.get(outerContext, outerSuggestion.suggestionId),
+    ).toBeNull();
+    expect(
+      await runtime.repositories.suggestions.get(nestedContext, nestedSuggestion.suggestionId),
+    ).toBeNull();
+
+    await runtime.unitOfWork.run(recoveryContext, async (repositories) => {
+      await repositories.suggestions.save(recoveryContext, recoverySuggestion);
+    });
+    expect(
+      await runtime.repositories.suggestions.get(recoveryContext, recoverySuggestion.suggestionId),
+    ).not.toBeNull();
+
+    runtime.reset();
+    expect(
+      await runtime.repositories.suggestions.get(recoveryContext, recoverySuggestion.suggestionId),
+    ).toBeNull();
+  }, 500);
+
+  it("keeps genuinely independent concurrent unit-of-work calls in FIFO order", async () => {
+    const runtime = createDemoRuntime();
+    const firstContext = operationContext("fifo-first");
+    const secondContext = operationContext("fifo-second");
+    const order: string[] = [];
+    let releaseFirst = (): void => undefined;
+    let markFirstEntered = (): void => undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const first = runtime.unitOfWork.run(firstContext, async (repositories) => {
+      order.push("first:start");
+      markFirstEntered();
+      await firstGate;
+      await repositories.suggestions.save(firstContext, suggestionRecord("fifo-first"));
+      order.push("first:end");
+    });
+    await firstEntered;
+    const second = runtime.unitOfWork.run(secondContext, async (repositories) => {
+      order.push("second:start");
+      await repositories.suggestions.save(secondContext, suggestionRecord("fifo-second"));
+      order.push("second:end");
+    });
+    await Promise.resolve();
+
+    expect(order).toEqual(["first:start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(order).toEqual(["first:start", "first:end", "second:start", "second:end"]);
   });
 });

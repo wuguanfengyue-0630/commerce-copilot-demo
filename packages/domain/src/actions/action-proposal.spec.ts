@@ -17,6 +17,7 @@ import {
   type ApprovalActor,
   type ApprovedActionProposal,
   approveProposal,
+  assertIssuedActionProposal,
   createActionProposal,
   type ExecutedActionProposal,
   type ExecutingActionProposal,
@@ -233,6 +234,23 @@ describe("action proposal state machine", () => {
     expect(Object.getOwnPropertySymbols(spreadProposal)).toHaveLength(0);
     expect(serializedProposal).not.toContain("ActionProposal.state");
     expect(JSON.parse(serializedProposal)).not.toHaveProperty("stateStamp");
+  });
+
+  it("accepts an issued action proposal", () => {
+    const proposal = refundProposal();
+
+    expect(() => assertIssuedActionProposal(proposal)).not.toThrow();
+  });
+
+  it("rejects spread, JSON, and manually frozen proposal forgeries", () => {
+    const proposal = refundProposal();
+    const spreadProposal = { ...proposal } as ActionProposal;
+    const jsonProposal = JSON.parse(JSON.stringify(proposal)) as ActionProposal;
+    const manuallyFrozenProposal = forgeApprovedByCopyingDescriptors(proposal);
+
+    for (const forgery of [spreadProposal, jsonProposal, manuallyFrozenProposal]) {
+      expectTransitionError(() => assertIssuedActionProposal(forgery), "ACTION_INVALID_PROPOSAL");
+    }
   });
 
   it("approves a pending refund without mutating the original snapshot", () => {

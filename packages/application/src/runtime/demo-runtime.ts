@@ -1,3 +1,6 @@
+/// <reference types="node" />
+
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { IsoTimestamp } from "@commerce-copilot/domain";
 import type {
   ApplicationRepositories,
@@ -38,21 +41,37 @@ export function createDemoRuntime(): DemoRuntime {
   let state = createSeedState();
   let pendingTransactions = 0;
   let transactionTail: Promise<void> = Promise.resolve();
+  const transactionScope = new AsyncLocalStorage<{ active: boolean }>();
 
-  const repositories = createRepositories(() => state);
+  const repositories = createRepositories(
+    () => state,
+    () => {
+      if (pendingTransactions > 0) {
+        throw new DemoRuntimeError("DEMO_RUNTIME_TRANSACTION_ACTIVE");
+      }
+    },
+  );
   const unitOfWork: ApplicationUnitOfWork = Object.freeze({
     async run<Result>(
       context: OperationContext,
       work: (repositories: ApplicationRepositories) => Promise<Result>,
     ): Promise<Result> {
+      if (transactionScope.getStore()?.active === true) {
+        throw new DemoRuntimeError("DEMO_RUNTIME_TRANSACTION_ACTIVE");
+      }
       assertContext(context);
       pendingTransactions += 1;
       const operation = transactionTail.then(async () => {
         const stagedState = cloneState(state);
         const stagedRepositories = createRepositories(() => stagedState);
-        const result = await work(stagedRepositories);
-        state = stagedState;
-        return result;
+        const scope = { active: true };
+        try {
+          const result = await transactionScope.run(scope, () => work(stagedRepositories));
+          state = stagedState;
+          return result;
+        } finally {
+          scope.active = false;
+        }
       });
       transactionTail = operation.then(
         () => undefined,
@@ -79,7 +98,10 @@ export function createDemoRuntime(): DemoRuntime {
   });
 }
 
-function createRepositories(readState: () => DemoState): ApplicationRepositories {
+function createRepositories(
+  readState: () => DemoState,
+  assertMutationAllowed: () => void = () => undefined,
+): ApplicationRepositories {
   const repositories: ApplicationRepositories = {
     conversations: Object.freeze({
       async get(context, conversationId) {
@@ -123,6 +145,7 @@ function createRepositories(readState: () => DemoState): ApplicationRepositories
 
     suggestions: Object.freeze({
       async save(context, record) {
+        assertMutationAllowed();
         const snapshot = snapshotSuggestion(context, record);
         const suggestions = readState().suggestions;
         if (suggestions.has(snapshot.suggestionId)) {
@@ -169,6 +192,7 @@ function createRepositories(readState: () => DemoState): ApplicationRepositories
 
     proposals: Object.freeze({
       async save(context, proposal) {
+        assertMutationAllowed();
         assertContext(context);
         assertTrustedProposal(context, proposal);
         readState().proposals.set(proposal.proposalId, proposal);
@@ -194,6 +218,7 @@ function createRepositories(readState: () => DemoState): ApplicationRepositories
 
     approvalDecisions: Object.freeze({
       async save(context, decision) {
+        assertMutationAllowed();
         const snapshot = snapshotApprovalDecision(context, decision);
         const decisions = readState().approvalDecisions;
         if (decisions.has(snapshot.approvalDecisionId)) {
@@ -227,6 +252,7 @@ function createRepositories(readState: () => DemoState): ApplicationRepositories
 
     executionAttempts: Object.freeze({
       async save(context, attempt) {
+        assertMutationAllowed();
         const snapshot = snapshotExecutionAttempt(context, attempt);
         const attempts = readState().executionAttempts;
         if (attempts.has(snapshot.executionAttemptId)) {
@@ -259,6 +285,7 @@ function createRepositories(readState: () => DemoState): ApplicationRepositories
 
     executionResults: Object.freeze({
       async save(context, result) {
+        assertMutationAllowed();
         const snapshot = snapshotExecutionResult(context, result);
         const results = readState().executionResults;
         if (results.has(snapshot.idempotencyKey)) {
@@ -292,6 +319,7 @@ function createRepositories(readState: () => DemoState): ApplicationRepositories
 
     auditEvents: Object.freeze({
       async append(context, event) {
+        assertMutationAllowed();
         const snapshot = snapshotAuditEvent(context, event);
         const events = readState().auditEvents;
         if (events.has(snapshot.auditEventId)) {
