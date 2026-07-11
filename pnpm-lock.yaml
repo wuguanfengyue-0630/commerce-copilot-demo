@@ -80,6 +80,9 @@ importers:
       '@commerce-copilot/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@commerce-copilot/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/contracts:
     dependencies:
