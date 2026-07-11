@@ -13,7 +13,7 @@ import {
   type StoreId,
   toIsoTimestamp,
 } from "@commerce-copilot/domain";
-import { mockDeliveredOrder, mockStoreId } from "./mock-fixtures.ts";
+import { mockCompanyId, mockDeliveredOrder, mockOrderId, mockStoreId } from "./mock-fixtures.ts";
 
 export const MOCK_COMMERCE_CONNECTOR_ERROR_CODES = [
   "MOCK_STORE_NOT_FOUND",
@@ -70,18 +70,17 @@ export function createMockCommerceConnector(): MockCommerceConnector {
   const executions = new Map<string, ExecutionRecord>();
 
   return Object.freeze({
-    async getCapabilities(storeId: StoreId): Promise<CapabilityState[]> {
+    async getCapabilities(storeId: StoreId): Promise<readonly CapabilityState[]> {
       if (storeId !== mockStoreId) {
         throw new MockCommerceConnectorError("MOCK_STORE_NOT_FOUND");
       }
 
-      return Object.freeze(
-        capabilityFixtures.map((state) => Object.freeze({ ...state })),
-      ) as CapabilityState[];
+      return Object.freeze(capabilityFixtures.map((state) => Object.freeze({ ...state })));
     },
 
     async getOrder(command: GetOrderCommand): Promise<OrderSnapshot> {
-      if (command.storeId !== currentOrder.storeId || command.orderId !== currentOrder.orderId) {
+      const commandSnapshot = snapshotGetOrderCommand(command);
+      if (commandSnapshot.storeId !== mockStoreId || commandSnapshot.orderId !== mockOrderId) {
         throw new MockCommerceConnectorError("MOCK_ORDER_NOT_FOUND");
       }
 
@@ -101,8 +100,8 @@ export function createMockCommerceConnector(): MockCommerceConnector {
       }
 
       if (
-        commandSnapshot.storeId !== currentOrder.storeId ||
-        commandSnapshot.payload.orderId !== currentOrder.orderId
+        commandSnapshot.storeId !== mockStoreId ||
+        commandSnapshot.payload.orderId !== mockOrderId
       ) {
         throw new MockCommerceConnectorError("MOCK_ORDER_NOT_FOUND");
       }
@@ -136,12 +135,37 @@ export function createMockCommerceConnector(): MockCommerceConnector {
   });
 }
 
+function snapshotGetOrderCommand(command: GetOrderCommand): GetOrderCommand {
+  try {
+    if (
+      command === null ||
+      command === undefined ||
+      typeof command !== "object" ||
+      Array.isArray(command) ||
+      !isNonBlank(command.storeId) ||
+      !isNonBlank(command.orderId)
+    ) {
+      throw new Error("invalid command");
+    }
+
+    return Object.freeze({
+      storeId: command.storeId,
+      orderId: command.orderId,
+    });
+  } catch {
+    throw new MockCommerceConnectorError("MOCK_INVALID_COMMAND");
+  }
+}
+
 function snapshotOrder(snapshot: OrderSnapshot): OrderSnapshot {
   try {
     if (
       !isNonBlank(snapshot.companyId) ||
       !isNonBlank(snapshot.storeId) ||
       !isNonBlank(snapshot.orderId) ||
+      snapshot.companyId !== mockCompanyId ||
+      snapshot.storeId !== mockStoreId ||
+      snapshot.orderId !== mockOrderId ||
       !Number.isSafeInteger(snapshot.version) ||
       snapshot.version < 1 ||
       !ORDER_STATUSES.some((status) => status === snapshot.status)

@@ -1,7 +1,13 @@
-import type { ExecuteActionCommand } from "@commerce-copilot/application";
+import type {
+  CommerceConnector,
+  ExecuteActionCommand,
+  GetOrderCommand,
+} from "@commerce-copilot/application";
 import {
+  createCompanyId,
   createMoney,
   createOrderId,
+  createOrderSnapshot,
   createProposalId,
   createStoreId,
   type OrderSnapshot,
@@ -10,6 +16,7 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   createMockCommerceConnector,
+  MockCommerceConnectorError,
   type MockCommerceConnectorErrorCode,
 } from "./mock-commerce-connector.ts";
 import {
@@ -44,6 +51,7 @@ async function expectConnectorError(
   operation: Promise<object>,
   code: MockCommerceConnectorErrorCode,
 ): Promise<void> {
+  await expect(operation).rejects.toBeInstanceOf(MockCommerceConnectorError);
   await expect(operation).rejects.toMatchObject({
     name: "MockCommerceConnectorError",
     message: code,
@@ -111,6 +119,20 @@ describe("mock commerce connector", () => {
     expect(connector.executionCount("refund:proposal-1")).toBe(1);
   });
 
+  it("coalesces concurrent executions for the same idempotency key", async () => {
+    const connector = createMockCommerceConnector();
+    const command = refundExecutionCommand({ idempotencyKey: "refund:concurrent" });
+
+    const [first, second] = await Promise.all([
+      connector.executeAction(command),
+      connector.executeAction(command),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(second).toBe(first);
+    expect(connector.executionCount(command.idempotencyKey)).toBe(1);
+  });
+
   it("does not claim FlyPigeon send access", async () => {
     const connector = createMockCommerceConnector();
 
@@ -140,6 +162,17 @@ describe("mock commerce connector", () => {
     }
     expect(Reflect.set(messageSend, "status", "available")).toBe(false);
     expect(await connector.getCapabilities(mockStoreId)).toEqual(expectedCapabilities);
+  });
+
+  it("exposes capabilities as a readonly collection through the connector port", async () => {
+    const connector: CommerceConnector = createMockCommerceConnector();
+    const capabilities = await connector.getCapabilities(mockStoreId);
+
+    expect(Object.isFrozen(capabilities)).toBe(true);
+    if (!Object.isFrozen(capabilities)) {
+      // @ts-expect-error The connector port must not expose a mutable capability collection.
+      capabilities.push(expectedCapabilities[0]);
+    }
   });
 
   it("rejects capabilities for an unknown store", async () => {
@@ -180,6 +213,31 @@ describe("mock commerce connector", () => {
     expect(Object.isFrozen(order.refundable)).toBe(true);
   });
 
+  it.each([
+    { input: "null command", command: null as never },
+    { input: "undefined command", command: undefined as never },
+    {
+      input: "undefined store ID",
+      command: { storeId: undefined as never, orderId: mockOrderId },
+    },
+    {
+      input: "blank store ID",
+      command: { storeId: "  " as GetOrderCommand["storeId"], orderId: mockOrderId },
+    },
+    {
+      input: "undefined order ID",
+      command: { storeId: mockStoreId, orderId: undefined as never },
+    },
+    {
+      input: "blank order ID",
+      command: { storeId: mockStoreId, orderId: "\t" as GetOrderCommand["orderId"] },
+    },
+  ])("rejects malformed getOrder $input as an invalid command", async ({ command }) => {
+    const connector = createMockCommerceConnector();
+
+    await expectConnectorError(connector.getOrder(command), "MOCK_INVALID_COMMAND");
+  });
+
   it("returns stable errors for missing orders and store mismatches", async () => {
     const connector = createMockCommerceConnector();
 
@@ -217,6 +275,54 @@ describe("mock commerce connector", () => {
     expect(order.version).toBe(2);
     expect(order.refundable).toEqual(createMoney(6_400, "CNY"));
     expect(Object.isFrozen(order.refundable)).toBe(true);
+  });
+
+  it.each([
+    {
+      identity: "company",
+      snapshot: createOrderSnapshot({
+        ...mockDeliveredOrder,
+        companyId: createCompanyId("company-foreign"),
+        version: 2,
+      }),
+    },
+    {
+      identity: "store",
+      snapshot: createOrderSnapshot({
+        ...mockDeliveredOrder,
+        storeId: createStoreId("store-foreign"),
+        version: 2,
+      }),
+    },
+    {
+      identity: "order",
+      snapshot: createOrderSnapshot({
+        ...mockDeliveredOrder,
+        orderId: createOrderId("order-foreign"),
+        version: 2,
+      }),
+    },
+  ])("rejects a frozen $identity identity drift without changing seeded behavior", async ({
+    identity,
+    snapshot,
+  }) => {
+    const connector = createMockCommerceConnector();
+
+    await expectConnectorError(
+      Promise.resolve().then(() => {
+        connector.setOrder(snapshot);
+        return snapshot;
+      }),
+      "MOCK_INVALID_ORDER",
+    );
+
+    expect(await connector.getOrder({ storeId: mockStoreId, orderId: mockOrderId })).toEqual(
+      mockDeliveredOrder,
+    );
+    expect(await connector.getCapabilities(mockStoreId)).toEqual(expectedCapabilities);
+    const command = refundExecutionCommand({ idempotencyKey: `refund:identity-${identity}` });
+    expect((await connector.executeAction(command)).status).toBe("succeeded");
+    expect(connector.executionCount(command.idempotencyKey)).toBe(1);
   });
 
   it("finds an execution result only after execution", async () => {

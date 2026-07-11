@@ -29,7 +29,7 @@ export type ExecutionResult = Readonly<{
 }>;
 
 export interface CommerceConnector {
-  getCapabilities(storeId: StoreId): Promise<CapabilityState[]>;
+  getCapabilities(storeId: StoreId): Promise<readonly CapabilityState[]>;
   getOrder(command: GetOrderCommand): Promise<OrderSnapshot>;
   executeAction(command: ExecuteActionCommand): Promise<ExecutionResult>;
   findActionResult(idempotencyKey: string): Promise<ExecutionResult | null>;
