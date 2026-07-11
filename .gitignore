@@ -12,6 +12,7 @@ coverage/
 playwright-report/
 test-results/
 blob-report/
+output/
 
 .env
 .env.*

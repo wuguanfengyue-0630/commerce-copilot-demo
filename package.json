@@ -7,7 +7,7 @@
     "pnpm": "11.7.0"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @commerce-copilot/api --filter @commerce-copilot/web run dev",
+    "dev": "pnpm --filter @commerce-copilot/api dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",

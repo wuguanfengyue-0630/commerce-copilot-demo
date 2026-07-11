@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="Commerce Copilot 模拟客服控制台"
+    />
+    <title>客服工作台 · Commerce Copilot</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="topbar">
+      <div class="brand">Commerce Copilot</div>
+      <div class="environment-banner" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        模拟环境
+      </div>
+      <button
+        id="reset-demo"
+        class="button button-quiet topbar-reset"
+        type="button"
+        data-action="reset"
+      >
+        重置演示
+      </button>
+    </header>
+
+    <div id="app" class="app-shell" aria-busy="true">
+      <aside class="sidebar" aria-label="控制台导航与店铺状态">
+        <nav class="view-nav" aria-label="主要视图">
+          <div class="view-tabs" role="tablist" aria-label="控制台视图">
+            <button
+              id="tab-workspace"
+              class="view-tab is-active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="view-workspace"
+              data-view="workspace"
+            >
+              工作台
+            </button>
+            <button
+              id="tab-approvals"
+              class="view-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="view-approvals"
+              data-view="approvals"
+              tabindex="-1"
+            >
+              审批
+              <span id="approval-count" class="nav-count">0</span>
+            </button>
+            <button
+              id="tab-audit"
+              class="view-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="view-audit"
+              data-view="audit"
+              tabindex="-1"
+            >
+              审计
+            </button>
+          </div>
+        </nav>
+
+        <details class="store-status" open>
+          <summary>
+            <span>
+              <span class="sidebar-label">当前店铺</span>
+              <strong>抖音演示店铺</strong>
+            </span>
+            <span class="connection-status">已连接</span>
+          </summary>
+          <p class="store-meta">确定性模拟数据 · 不连接真实店铺</p>
+          <div class="section-label">能力状态</div>
+          <div id="capability-list" class="capability-list" aria-live="polite">
+            <div class="capability-row is-loading" aria-hidden="true">
+              <span class="skeleton skeleton-short"></span>
+              <span class="skeleton skeleton-status"></span>
+            </div>
+            <div class="capability-row is-loading" aria-hidden="true">
+              <span class="skeleton skeleton-short"></span>
+              <span class="skeleton skeleton-status"></span>
+            </div>
+          </div>
+        </details>
+      </aside>
+
+      <main id="main-content" class="main-content" tabindex="-1">
+        <div id="global-feedback" class="global-feedback" aria-live="polite"></div>
+
+        <section
+          id="view-workspace"
+          class="view-panel"
+          role="tabpanel"
+          aria-labelledby="tab-workspace"
+          data-view-panel="workspace"
+        >
+          <header class="view-heading">
+            <div>
+              <p class="eyebrow">客服协作</p>
+              <h1>客服工作台</h1>
+            </div>
+            <div id="workspace-status" class="heading-status" role="status">正在载入会话…</div>
+          </header>
+
+          <div class="mobile-workspace-tabs" role="tablist" aria-label="工作台区域">
+            <button
+              class="mobile-pane-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="conversation-pane"
+              data-mobile-panel="conversations"
+              tabindex="-1"
+            >
+              会话
+            </button>
+            <button
+              class="mobile-pane-tab is-active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="thread-pane"
+              data-mobile-panel="thread"
+            >
+              对话与建议
+            </button>
+            <button
+              class="mobile-pane-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="context-pane"
+              data-mobile-panel="context"
+              tabindex="-1"
+            >
+              订单上下文
+            </button>
+          </div>
+
+          <div id="workspace-grid" class="workspace-grid" data-mobile-pane="thread">
+            <section
+              id="conversation-pane"
+              class="workspace-pane conversation-pane"
+              aria-labelledby="conversation-pane-title"
+              data-pane="conversations"
+            >
+              <header class="pane-header">
+                <div>
+                  <p class="pane-kicker">队列</p>
+                  <h2 id="conversation-pane-title">待处理会话</h2>
+                </div>
+                <span id="conversation-count" class="count-label">—</span>
+              </header>
+              <div id="conversation-list" class="conversation-list">
+                <div class="loading-block" role="status">
+                  <span class="sr-only">正在载入会话</span>
+                  <span class="skeleton skeleton-wide"></span>
+                  <span class="skeleton skeleton-medium"></span>
+                  <span class="skeleton skeleton-small"></span>
+                </div>
+              </div>
+            </section>
+
+            <section
+              id="thread-pane"
+              class="workspace-pane thread-pane"
+              aria-labelledby="thread-pane-title"
+              data-pane="thread"
+            >
+              <header id="conversation-header" class="pane-header thread-header">
+                <div>
+                  <p class="pane-kicker">当前会话</p>
+                  <h2 id="thread-pane-title">正在载入…</h2>
+                </div>
+              </header>
+              <div id="message-thread" class="message-thread" aria-live="polite">
+                <div class="loading-block" role="status">
+                  <span class="sr-only">正在载入消息</span>
+                  <span class="skeleton skeleton-small"></span>
+                  <span class="skeleton skeleton-wide"></span>
+                  <span class="skeleton skeleton-medium"></span>
+                </div>
+              </div>
+              <section class="suggestion-composer" aria-labelledby="suggestion-title">
+                <header class="composer-header">
+                  <div>
+                    <p class="pane-kicker">回复协作</p>
+                    <h2 id="suggestion-title">有据建议</h2>
+                  </div>
+                </header>
+                <div id="suggestion-content">
+                  <div class="loading-block" role="status">
+                    <span class="sr-only">正在准备建议区域</span>
+                    <span class="skeleton skeleton-wide"></span>
+                    <span class="skeleton skeleton-medium"></span>
+                  </div>
+                </div>
+              </section>
+            </section>
+
+            <aside
+              id="context-pane"
+              class="workspace-pane context-pane"
+              aria-labelledby="context-pane-title"
+              data-pane="context"
+            >
+              <header class="pane-header">
+                <div>
+                  <p class="pane-kicker">事实与权限</p>
+                  <h2 id="context-pane-title">订单上下文</h2>
+                </div>
+              </header>
+              <div id="context-content" class="context-content">
+                <div class="loading-block" role="status">
+                  <span class="sr-only">正在载入订单上下文</span>
+                  <span class="skeleton skeleton-medium"></span>
+                  <span class="skeleton skeleton-wide"></span>
+                  <span class="skeleton skeleton-small"></span>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section
+          id="view-approvals"
+          class="view-panel"
+          role="tabpanel"
+          aria-labelledby="tab-approvals"
+          data-view-panel="approvals"
+          hidden
+        >
+          <header class="view-heading">
+            <div>
+              <p class="eyebrow">人工决策</p>
+              <h1>退款审批</h1>
+            </div>
+            <div class="heading-status status-manual">主管审批后方可执行</div>
+          </header>
+          <div id="approval-content" class="management-surface">
+            <div class="loading-block" role="status">
+              <span class="sr-only">正在载入审批信息</span>
+              <span class="skeleton skeleton-wide"></span>
+              <span class="skeleton skeleton-medium"></span>
+            </div>
+          </div>
+        </section>
+
+        <section
+          id="view-audit"
+          class="view-panel"
+          role="tabpanel"
+          aria-labelledby="tab-audit"
+          data-view-panel="audit"
+          hidden
+        >
+          <header class="view-heading">
+            <div>
+              <p class="eyebrow">只读记录</p>
+              <h1>审计时间线</h1>
+            </div>
+            <div class="heading-status">按发生时间排列</div>
+          </header>
+          <div id="audit-content" class="management-surface">
+            <div class="loading-block" role="status">
+              <span class="sr-only">正在载入审计事件</span>
+              <span class="skeleton skeleton-wide"></span>
+              <span class="skeleton skeleton-medium"></span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

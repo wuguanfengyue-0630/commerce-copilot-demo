@@ -1,3 +1,5 @@
+export * from "./actions/decide-approval.ts";
+export * from "./actions/execute-action.ts";
 export * from "./ports/commerce-connector.ts";
 export * from "./ports/repositories.ts";
 export * from "./ports/suggestion-generator.ts";

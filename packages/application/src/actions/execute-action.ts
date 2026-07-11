@@ -1,0 +1,405 @@
+import {
+  type ActionProposal,
+  type ApprovedActionProposal,
+  type Clock,
+  createAuditEvent,
+  createAuditEventId,
+  createOrderId,
+  type ExecutedActionProposal,
+  type ExecutingActionProposal,
+  markExecuted,
+  markExecuting,
+  type OrderSnapshot,
+  toIsoTimestamp,
+} from "@commerce-copilot/domain";
+import type { CommerceConnector, ExecutionResult } from "../ports/commerce-connector.ts";
+import type {
+  ApplicationRepositories,
+  ApplicationUnitOfWork,
+  ExecutionAttemptRecord,
+  ExecutionResultRecord,
+  OperationContext,
+} from "../ports/repositories.ts";
+import type { ApprovalCommandActor } from "./decide-approval.ts";
+
+export const EXECUTION_ERROR_CODES = [
+  "EXECUTION_INVALID_COMMAND",
+  "EXECUTION_NOT_FOUND",
+  "EXECUTION_ROLE_REQUIRED",
+  "EXECUTION_CONFLICT",
+  "EXECUTION_PERSIST_FAILED",
+] as const;
+
+export type ExecuteActionErrorCode = (typeof EXECUTION_ERROR_CODES)[number];
+
+export class ExecuteActionError extends Error {
+  readonly code: ExecuteActionErrorCode;
+
+  constructor(code: ExecuteActionErrorCode) {
+    super(code);
+    this.name = "ExecuteActionError";
+    this.code = code;
+  }
+}
+
+export type ExecuteApprovedActionCommand = Readonly<{
+  companyId: OperationContext["companyId"];
+  proposalId: ExecutionResultRecord["proposalId"];
+  actor: ApprovalCommandActor;
+  correlationId: string;
+  causationId: string;
+}>;
+
+export type ExecuteActionSucceeded = Readonly<{
+  status: "succeeded";
+  proposal: ExecutedActionProposal;
+  executionResult: ExecutionResultRecord;
+}>;
+
+export type ExecuteActionNeedsHuman = Readonly<{
+  status: "needs_human";
+  proposal: ApprovedActionProposal | ExecutingActionProposal;
+  reason: "ORDER_CHANGED" | "ORDER_UNAVAILABLE" | "EXECUTION_UNCONFIRMED";
+}>;
+
+export type ExecuteApprovedActionResult = ExecuteActionSucceeded | ExecuteActionNeedsHuman;
+
+export type CreateExecuteActionDependencies = Readonly<{
+  repositories: ApplicationRepositories;
+  unitOfWork: ApplicationUnitOfWork;
+  commerceConnector: CommerceConnector;
+  clock: Clock;
+}>;
+
+export interface ExecuteActionUseCase {
+  execute(command: ExecuteApprovedActionCommand): Promise<ExecuteApprovedActionResult>;
+}
+
+export function createExecuteActionUseCase(
+  dependencies: CreateExecuteActionDependencies,
+): ExecuteActionUseCase {
+  return Object.freeze({
+    async execute(command: ExecuteApprovedActionCommand): Promise<ExecuteApprovedActionResult> {
+      assertCommand(command);
+      if (command.actor.role !== "supervisor" && command.actor.role !== "admin") {
+        throw new ExecuteActionError("EXECUTION_ROLE_REQUIRED");
+      }
+
+      const context = operationContext(command);
+      try {
+        return await dependencies.unitOfWork.run(context, async (repositories) => {
+          const proposal = await repositories.proposals.get(context, command.proposalId);
+          if (proposal === null) {
+            throw new ExecuteActionError("EXECUTION_NOT_FOUND");
+          }
+
+          const idempotencyKey = `refund:${proposal.proposalId}`;
+          if (proposal.status === "executed") {
+            return loadExecutedResult(repositories, context, proposal, idempotencyKey);
+          }
+          if (proposal.status === "executing") {
+            return Object.freeze({
+              status: "needs_human",
+              proposal,
+              reason: "EXECUTION_UNCONFIRMED",
+            });
+          }
+          if (proposal.status !== "approved") {
+            throw new ExecuteActionError("EXECUTION_CONFLICT");
+          }
+
+          const evaluatedAt = toIsoTimestamp(dependencies.clock.now());
+          let liveOrder: OrderSnapshot;
+          try {
+            liveOrder = await dependencies.commerceConnector.getOrder({
+              storeId: proposal.storeId,
+              orderId: createOrderId(proposal.payload.orderId),
+            });
+          } catch {
+            return persistBlocked(
+              repositories,
+              context,
+              proposal,
+              idempotencyKey,
+              evaluatedAt,
+              "ORDER_UNAVAILABLE",
+            );
+          }
+
+          if (!matchesObservedOrder(proposal, liveOrder)) {
+            return persistBlocked(
+              repositories,
+              context,
+              proposal,
+              idempotencyKey,
+              evaluatedAt,
+              "ORDER_CHANGED",
+            );
+          }
+
+          let executing: ExecutingActionProposal;
+          try {
+            executing = markExecuting(proposal, evaluatedAt);
+          } catch {
+            throw new ExecuteActionError("EXECUTION_CONFLICT");
+          }
+          await repositories.proposals.save(context, executing);
+          await repositories.executionAttempts.save(
+            context,
+            executionAttempt(proposal, context, idempotencyKey, "started", evaluatedAt),
+          );
+          await repositories.auditEvents.append(
+            context,
+            executionAudit(
+              proposal,
+              context,
+              "05-execution-started",
+              "action.execution_started",
+              evaluatedAt,
+            ),
+          );
+
+          const connectorResult = await executeOrRecover(
+            dependencies.commerceConnector,
+            proposal,
+            idempotencyKey,
+          );
+          if (connectorResult === null) {
+            await repositories.executionAttempts.save(
+              context,
+              executionAttempt(
+                proposal,
+                context,
+                idempotencyKey,
+                "blocked",
+                evaluatedAt,
+                "EXECUTION_UNCONFIRMED",
+              ),
+            );
+            await repositories.auditEvents.append(
+              context,
+              executionAudit(
+                proposal,
+                context,
+                "06-execution-blocked",
+                "action.execution_blocked",
+                evaluatedAt,
+              ),
+            );
+            return Object.freeze({
+              status: "needs_human",
+              proposal: executing,
+              reason: "EXECUTION_UNCONFIRMED",
+            });
+          }
+
+          const executed = markExecuted(executing, {
+            executionId: connectorResult.executionId,
+            executedAt: connectorResult.completedAt,
+          });
+          const storedResult = executionResult(proposal, context, connectorResult);
+          await repositories.proposals.save(context, executed);
+          await repositories.executionResults.save(context, storedResult);
+          await repositories.executionAttempts.save(
+            context,
+            executionAttempt(
+              proposal,
+              context,
+              idempotencyKey,
+              "succeeded",
+              connectorResult.completedAt,
+            ),
+          );
+          await repositories.auditEvents.append(
+            context,
+            executionAudit(
+              proposal,
+              context,
+              "06-execution-succeeded",
+              "action.execution_succeeded",
+              connectorResult.completedAt,
+            ),
+          );
+
+          return Object.freeze({
+            status: "succeeded",
+            proposal: executed,
+            executionResult: storedResult,
+          });
+        });
+      } catch (error) {
+        if (error instanceof ExecuteActionError) {
+          throw error;
+        }
+        throw new ExecuteActionError("EXECUTION_PERSIST_FAILED");
+      }
+    },
+  });
+}
+
+async function loadExecutedResult(
+  repositories: ApplicationRepositories,
+  context: OperationContext,
+  proposal: ExecutedActionProposal,
+  idempotencyKey: string,
+): Promise<ExecuteActionSucceeded> {
+  const storedResult = await repositories.executionResults.findByIdempotencyKey(
+    context,
+    idempotencyKey,
+  );
+  if (storedResult === null || storedResult.proposalId !== proposal.proposalId) {
+    throw new ExecuteActionError("EXECUTION_PERSIST_FAILED");
+  }
+  return Object.freeze({
+    status: "succeeded",
+    proposal,
+    executionResult: storedResult,
+  });
+}
+
+async function persistBlocked(
+  repositories: ApplicationRepositories,
+  context: OperationContext,
+  proposal: ApprovedActionProposal,
+  idempotencyKey: string,
+  attemptedAt: ExecutionAttemptRecord["attemptedAt"],
+  reason: ExecuteActionNeedsHuman["reason"],
+): Promise<ExecuteActionNeedsHuman> {
+  await repositories.executionAttempts.save(
+    context,
+    executionAttempt(proposal, context, idempotencyKey, "blocked", attemptedAt, reason),
+  );
+  await repositories.auditEvents.append(
+    context,
+    executionAudit(
+      proposal,
+      context,
+      "05-execution-blocked",
+      "action.execution_blocked",
+      attemptedAt,
+    ),
+  );
+  return Object.freeze({ status: "needs_human", proposal, reason });
+}
+
+async function executeOrRecover(
+  connector: CommerceConnector,
+  proposal: ApprovedActionProposal,
+  idempotencyKey: string,
+): Promise<ExecutionResult | null> {
+  try {
+    return await connector.executeAction({
+      storeId: proposal.storeId,
+      proposalId: proposal.proposalId,
+      payload: proposal.payload,
+      idempotencyKey,
+    });
+  } catch {
+    try {
+      return await connector.findActionResult(idempotencyKey);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function matchesObservedOrder(proposal: ApprovedActionProposal, order: OrderSnapshot): boolean {
+  return (
+    order.companyId === proposal.companyId &&
+    order.storeId === proposal.storeId &&
+    order.orderId === proposal.payload.orderId &&
+    String(order.version) === proposal.payload.observedOrderVersion &&
+    order.status === proposal.payload.observedOrderStatus &&
+    order.refundable.amountMinor === proposal.payload.observedRefundableAmount.amountMinor &&
+    order.refundable.currency === proposal.payload.observedRefundableAmount.currency &&
+    proposal.payload.amount.amountMinor <= order.refundable.amountMinor &&
+    proposal.payload.amount.currency === order.refundable.currency
+  );
+}
+
+function executionAttempt(
+  proposal: ActionProposal,
+  context: OperationContext,
+  idempotencyKey: string,
+  status: ExecutionAttemptRecord["status"],
+  attemptedAt: ExecutionAttemptRecord["attemptedAt"],
+  reason?: string,
+): ExecutionAttemptRecord {
+  const base = {
+    executionAttemptId: `attempt-${proposal.proposalId}-${status}`,
+    companyId: proposal.companyId,
+    proposalId: proposal.proposalId,
+    idempotencyKey,
+    status,
+    correlationId: context.correlationId,
+    causationId: context.causationId,
+    attemptedAt,
+  };
+  return reason === undefined ? Object.freeze(base) : Object.freeze({ ...base, reason });
+}
+
+function executionResult(
+  proposal: ApprovedActionProposal,
+  context: OperationContext,
+  result: ExecutionResult,
+): ExecutionResultRecord {
+  return Object.freeze({
+    executionId: result.executionId,
+    companyId: proposal.companyId,
+    proposalId: proposal.proposalId,
+    idempotencyKey: result.idempotencyKey,
+    status: "succeeded",
+    externalReference: result.externalReference,
+    correlationId: context.correlationId,
+    causationId: context.causationId,
+    completedAt: result.completedAt,
+  });
+}
+
+function executionAudit(
+  proposal: ActionProposal,
+  context: OperationContext,
+  stage: string,
+  eventType: Parameters<typeof createAuditEvent>[0]["eventType"],
+  occurredAt: ExecutionAttemptRecord["attemptedAt"],
+) {
+  return createAuditEvent({
+    auditEventId: createAuditEventId(`audit-${proposal.proposalId}-${stage}`),
+    companyId: proposal.companyId,
+    correlationId: context.correlationId,
+    causationId: context.causationId,
+    eventType,
+    occurredAt,
+  });
+}
+
+function assertCommand(command: ExecuteApprovedActionCommand): void {
+  if (
+    command === null ||
+    command === undefined ||
+    !isNonBlank(command.companyId) ||
+    !isNonBlank(command.proposalId) ||
+    !isNonBlank(command.actor?.id) ||
+    !isRole(command.actor?.role) ||
+    !isNonBlank(command.correlationId) ||
+    !isNonBlank(command.causationId)
+  ) {
+    throw new ExecuteActionError("EXECUTION_INVALID_COMMAND");
+  }
+}
+
+function operationContext(command: ExecuteApprovedActionCommand): OperationContext {
+  return Object.freeze({
+    companyId: command.companyId,
+    correlationId: command.correlationId,
+    causationId: command.causationId,
+  });
+}
+
+function isRole(role: ApprovalCommandActor["role"]): boolean {
+  return role === "agent" || role === "supervisor" || role === "admin";
+}
+
+function isNonBlank(value: string): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}

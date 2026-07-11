@@ -44,6 +44,9 @@ importers:
       '@commerce-copilot/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@commerce-copilot/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
 
   apps/web:
     dependencies:
