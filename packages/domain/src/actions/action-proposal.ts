@@ -1,7 +1,9 @@
 import { type IsoTimestamp, toIsoTimestamp } from "../shared/clock.ts";
 import type { CompanyId, ConversationId, ProposalId, StoreId, UserId } from "../shared/ids.ts";
 import type { Money } from "../shared/money.ts";
-import type { ActionProposalStatus } from "./action-status.ts";
+import { ACTION_PROPOSAL_STATUSES, type ActionProposalStatus } from "./action-status.ts";
+
+const ACTION_PROPOSAL_STATE = Symbol("ActionProposal.state");
 
 export interface AfterSaleRefundPayload {
   kind: "after_sale.refund";
@@ -28,19 +30,74 @@ export type ActionExecutionResult = Readonly<{
   executedAt: IsoTimestamp;
 }>;
 
-export type ActionProposal = Readonly<{
+type ActionProposalBase = Readonly<{
   proposalId: ProposalId;
   companyId: CompanyId;
   storeId: StoreId;
   conversationId: ConversationId;
   payload: Readonly<AfterSaleRefundPayload>;
-  status: ActionProposalStatus;
   createdAt: IsoTimestamp;
   expiresAt: IsoTimestamp;
-  approval?: ActionApproval;
-  executionStartedAt?: IsoTimestamp;
-  executionResult?: ActionExecutionResult;
 }>;
+
+type ProposalStateSeal<Status extends ActionProposalStatus> = Readonly<{
+  [ACTION_PROPOSAL_STATE]: Status;
+}>;
+
+export type PendingActionProposal = Readonly<
+  ActionProposalBase &
+    ProposalStateSeal<"pending_approval"> & {
+      status: "pending_approval";
+    }
+>;
+
+export type ApprovedActionProposal = Readonly<
+  ActionProposalBase &
+    ProposalStateSeal<"approved"> & {
+      status: "approved";
+      approval: ActionApproval;
+    }
+>;
+
+export type ExecutingActionProposal = Readonly<
+  ActionProposalBase &
+    ProposalStateSeal<"executing"> & {
+      status: "executing";
+      approval: ActionApproval;
+      executionStartedAt: IsoTimestamp;
+    }
+>;
+
+export type ExecutedActionProposal = Readonly<
+  ActionProposalBase &
+    ProposalStateSeal<"executed"> & {
+      status: "executed";
+      approval: ActionApproval;
+      executionStartedAt: IsoTimestamp;
+      executionResult: ActionExecutionResult;
+    }
+>;
+
+type ClosedActionProposalStatus = Exclude<
+  ActionProposalStatus,
+  "pending_approval" | "approved" | "executing" | "executed"
+>;
+
+export type ClosedActionProposal = {
+  [Status in ClosedActionProposalStatus]: Readonly<
+    ActionProposalBase &
+      ProposalStateSeal<Status> & {
+        status: Status;
+      }
+  >;
+}[ClosedActionProposalStatus];
+
+export type ActionProposal =
+  | PendingActionProposal
+  | ApprovedActionProposal
+  | ExecutingActionProposal
+  | ExecutedActionProposal
+  | ClosedActionProposal;
 
 export type ActionProposalInput = Readonly<{
   proposalId: ProposalId;
@@ -54,6 +111,7 @@ export type ActionProposalInput = Readonly<{
 
 export const ACTION_TRANSITION_ERROR_CODES = [
   "ACTION_EXPIRED",
+  "ACTION_INVALID_PROPOSAL",
   "ACTION_NOT_APPROVED",
   "ACTION_NOT_EXECUTING",
   "ACTION_NOT_PENDING_APPROVAL",
@@ -71,24 +129,39 @@ export class ActionTransitionError extends Error {
   }
 }
 
-export function createActionProposal(input: ActionProposalInput): ActionProposal {
-  return Object.freeze({
-    proposalId: input.proposalId,
-    companyId: input.companyId,
-    storeId: input.storeId,
-    conversationId: input.conversationId,
-    payload: Object.freeze({ ...input.payload }),
-    status: "pending_approval",
-    createdAt: toIsoTimestamp(input.createdAt),
-    expiresAt: toIsoTimestamp(input.expiresAt),
+export function createActionProposal(input: ActionProposalInput): PendingActionProposal {
+  const payload = Object.freeze({
+    kind: input.payload.kind,
+    orderId: input.payload.orderId,
+    amount: input.payload.amount,
+    reasonCode: input.payload.reasonCode,
+    observedOrderVersion: input.payload.observedOrderVersion,
+    observedOrderStatus: input.payload.observedOrderStatus,
+    observedRefundableAmount: input.payload.observedRefundableAmount,
   });
+
+  return sealProposal(
+    {
+      proposalId: input.proposalId,
+      companyId: input.companyId,
+      storeId: input.storeId,
+      conversationId: input.conversationId,
+      payload,
+      status: "pending_approval",
+      createdAt: toIsoTimestamp(input.createdAt),
+      expiresAt: toIsoTimestamp(input.expiresAt),
+    },
+    "pending_approval",
+  );
 }
 
 export function approveProposal(
   proposal: ActionProposal,
   approver: ApprovalActor,
   approvedAt: Date | string,
-): ActionProposal {
+): ApprovedActionProposal {
+  assertValidProposal(proposal);
+
   if (proposal.status !== "pending_approval") {
     throw new ActionTransitionError("ACTION_NOT_PENDING_APPROVAL");
   }
@@ -96,41 +169,56 @@ export function approveProposal(
   const normalizedApprovedAt = toIsoTimestamp(approvedAt);
   assertNotExpired(proposal, normalizedApprovedAt);
 
-  const approvedBy = Object.freeze({ ...approver });
+  const approvedBy = Object.freeze({
+    userId: approver.userId,
+    role: approver.role,
+  });
   const approval = Object.freeze({
     approvedBy,
     approvedAt: normalizedApprovedAt,
   });
 
-  return Object.freeze({
-    ...proposal,
-    status: "approved",
-    approval,
-  });
+  return sealProposal(
+    {
+      ...proposalBase(proposal),
+      status: "approved",
+      approval,
+    },
+    "approved",
+  );
 }
 
 export function markExecuting(
   proposal: ActionProposal,
   executionStartedAt: Date | string,
-): ActionProposal {
+): ExecutingActionProposal {
+  assertValidProposal(proposal);
+
   if (proposal.status !== "approved") {
     throw new ActionTransitionError("ACTION_NOT_APPROVED");
   }
 
+  assertValidApproval(proposal);
   const normalizedExecutionStartedAt = toIsoTimestamp(executionStartedAt);
   assertNotExpired(proposal, normalizedExecutionStartedAt);
 
-  return Object.freeze({
-    ...proposal,
-    status: "executing",
-    executionStartedAt: normalizedExecutionStartedAt,
-  });
+  return sealProposal(
+    {
+      ...proposalBase(proposal),
+      status: "executing",
+      approval: proposal.approval,
+      executionStartedAt: normalizedExecutionStartedAt,
+    },
+    "executing",
+  );
 }
 
 export function markExecuted(
   proposal: ActionProposal,
   executionResult: ActionExecutionResult,
-): ActionProposal {
+): ExecutedActionProposal {
+  assertValidProposal(proposal);
+
   if (proposal.status === "executed") {
     return proposal;
   }
@@ -139,11 +227,93 @@ export function markExecuted(
     throw new ActionTransitionError("ACTION_NOT_EXECUTING");
   }
 
-  return Object.freeze({
-    ...proposal,
-    status: "executed",
-    executionResult: Object.freeze({ ...executionResult }),
+  const frozenExecutionResult = Object.freeze({
+    executionId: executionResult.executionId,
+    executedAt: executionResult.executedAt,
   });
+
+  return sealProposal(
+    {
+      ...proposalBase(proposal),
+      status: "executed",
+      approval: proposal.approval,
+      executionStartedAt: proposal.executionStartedAt,
+      executionResult: frozenExecutionResult,
+    },
+    "executed",
+  );
+}
+
+function proposalBase(proposal: ActionProposal): ActionProposalBase {
+  return {
+    proposalId: proposal.proposalId,
+    companyId: proposal.companyId,
+    storeId: proposal.storeId,
+    conversationId: proposal.conversationId,
+    payload: proposal.payload,
+    createdAt: proposal.createdAt,
+    expiresAt: proposal.expiresAt,
+  };
+}
+
+function sealProposal<Status extends ActionProposalStatus, Snapshot extends { status: Status }>(
+  snapshot: Snapshot,
+  status: Status,
+): Readonly<Snapshot & ProposalStateSeal<Status>> {
+  Object.defineProperty(snapshot, ACTION_PROPOSAL_STATE, {
+    value: status,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+
+  return Object.freeze(snapshot) as Readonly<Snapshot & ProposalStateSeal<Status>>;
+}
+
+function assertValidProposal(proposal: ActionProposal): void {
+  const stateDescriptor = Object.getOwnPropertyDescriptor(proposal, ACTION_PROPOSAL_STATE);
+  const hasCanonicalStatus = ACTION_PROPOSAL_STATUSES.some((status) => status === proposal.status);
+
+  if (
+    !Object.isFrozen(proposal) ||
+    !hasCanonicalStatus ||
+    stateDescriptor === undefined ||
+    stateDescriptor.value !== proposal.status ||
+    stateDescriptor.enumerable !== false ||
+    stateDescriptor.configurable !== false ||
+    stateDescriptor.writable !== false
+  ) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
+}
+
+function assertValidApproval(proposal: ApprovedActionProposal): void {
+  const approval = proposal.approval;
+  const approvedBy = approval?.approvedBy;
+
+  if (
+    approval === undefined ||
+    approvedBy === undefined ||
+    !Object.isFrozen(approval) ||
+    !Object.isFrozen(approvedBy) ||
+    (approvedBy.role !== "supervisor" && approvedBy.role !== "admin") ||
+    typeof approvedBy.userId !== "string" ||
+    approvedBy.userId.trim().length === 0 ||
+    typeof approval.approvedAt !== "string" ||
+    !isCanonicalTimestamp(approval.approvedAt) ||
+    approval.approvedAt < proposal.createdAt ||
+    approval.approvedAt >= proposal.expiresAt
+  ) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
+}
+
+function isCanonicalTimestamp(value: string): boolean {
+  try {
+    return toIsoTimestamp(value) === value;
+  } catch {
+    return false;
+  }
 }
 
 function assertNotExpired(proposal: ActionProposal, evaluatedAt: IsoTimestamp): void {

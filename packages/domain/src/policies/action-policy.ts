@@ -26,9 +26,11 @@ export type ActionPolicyInput = Readonly<{
 export type MessageSendMode = "direct" | "assisted";
 
 export function evaluateActionPolicy(input: ActionPolicyInput): PolicyEvaluation {
-  const hasEnabledDemoRefundRule = input.rules?.some(
-    (rule) => rule.kind === "after_sale.refund" && rule.enabled,
-  );
+  const matchingRefundRules =
+    input.rules?.filter((rule) => rule.kind === "after_sale.refund") ?? [];
+  const [onlyRefundRule] = matchingRefundRules;
+  const hasEnabledDemoRefundRule =
+    matchingRefundRules.length === 1 && onlyRefundRule?.enabled === true;
 
   if (input.actionKind !== "after_sale.refund" || !hasEnabledDemoRefundRule) {
     return createEvaluation({
@@ -60,9 +62,10 @@ export function evaluateActionPolicy(input: ActionPolicyInput): PolicyEvaluation
 }
 
 export function resolveMessageSendMode(states: readonly CapabilityState[]): MessageSendMode {
-  const canSendDirectly = states.some(
-    (state) => state.capability === "message.send" && state.status === "available",
-  );
+  const messageSendStates = states.filter((state) => state.capability === "message.send");
+  const [onlyMessageSendState] = messageSendStates;
+  const canSendDirectly =
+    messageSendStates.length === 1 && onlyMessageSendState?.status === "available";
 
   return canSendDirectly ? "direct" : "assisted";
 }

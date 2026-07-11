@@ -12,6 +12,11 @@ const enabledDemoRefundRule = Object.freeze({
   enabled: true,
 }) satisfies DemoRefundRule;
 
+const disabledDemoRefundRule = Object.freeze({
+  kind: "after_sale.refund",
+  enabled: false,
+}) satisfies DemoRefundRule;
+
 describe("evaluateActionPolicy", () => {
   it.each([
     "after_sale.refund",
@@ -88,6 +93,26 @@ describe("evaluateActionPolicy", () => {
     ).toBe(false);
   });
 
+  it.each([
+    [enabledDemoRefundRule, disabledDemoRefundRule],
+    [disabledDemoRefundRule, enabledDemoRefundRule],
+    [enabledDemoRefundRule, enabledDemoRefundRule],
+  ])("fails closed when refund rules conflict or are duplicated", (...rules) => {
+    expect(
+      evaluateActionPolicy({
+        actionKind: "after_sale.refund",
+        actorRole: "admin",
+        rules,
+      }),
+    ).toEqual({
+      allowed: false,
+      requiresApproval: false,
+      requiredRole: null,
+      riskLevel: "high",
+      reasons: ["ACTION_DEFAULT_DENY"],
+    });
+  });
+
   it("does not expose model-reported confidence", () => {
     const evaluation = evaluateActionPolicy({
       actionKind: "after_sale.refund",
@@ -114,6 +139,29 @@ describe("resolveMessageSendMode", () => {
     "degraded",
   ])("uses assisted mode when message.send is %s", (status) => {
     const states: readonly CapabilityState[] = [{ capability: "message.send", status }];
+
+    expect(resolveMessageSendMode(states)).toBe("assisted");
+  });
+
+  it.each<CapabilityStatus>([
+    "degraded",
+    "unavailable",
+  ])("fails closed for available plus %s in either order", (conflictingStatus) => {
+    const availableFirst: readonly CapabilityState[] = [
+      { capability: "message.send", status: "available" },
+      { capability: "message.send", status: conflictingStatus },
+    ];
+    const availableLast: readonly CapabilityState[] = [...availableFirst].reverse();
+
+    expect(resolveMessageSendMode(availableFirst)).toBe("assisted");
+    expect(resolveMessageSendMode(availableLast)).toBe("assisted");
+  });
+
+  it("fails closed for duplicate available message.send states", () => {
+    const states: readonly CapabilityState[] = [
+      { capability: "message.send", status: "available" },
+      { capability: "message.send", status: "available" },
+    ];
 
     expect(resolveMessageSendMode(states)).toBe("assisted");
   });
