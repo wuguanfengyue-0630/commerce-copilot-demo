@@ -7,7 +7,12 @@ import {
   type MessageRole,
 } from "../conversations/conversation.ts";
 import { createOrderSnapshot, type OrderStatus } from "../orders/order-snapshot.ts";
-import { type CapabilityState, hasCapability } from "../platform/capabilities.ts";
+import {
+  CAPABILITY_STATUSES,
+  type CapabilityState,
+  hasCapability,
+  PLATFORM_CAPABILITIES,
+} from "../platform/capabilities.ts";
 import { FixedClock, toIsoTimestamp } from "./clock.ts";
 import {
   type CompanyId,
@@ -119,6 +124,33 @@ describe("hasCapability", () => {
 
   it("returns false when the capability is absent", () => {
     expect(hasCapability(states, "event.verify")).toBe(false);
+  });
+});
+
+describe("canonical platform capability values", () => {
+  it("contains exactly the supported platform capabilities", () => {
+    expect(PLATFORM_CAPABILITIES).toEqual([
+      "store.authorize",
+      "store.token.refresh",
+      "catalog.product.read",
+      "order.read",
+      "logistics.read",
+      "afterSale.read",
+      "afterSale.write",
+      "message.receive",
+      "message.send",
+      "event.subscribe",
+      "event.verify",
+    ]);
+  });
+
+  it("contains exactly the supported capability statuses", () => {
+    expect(CAPABILITY_STATUSES).toEqual([
+      "available",
+      "unavailable",
+      "waiting_qualification",
+      "degraded",
+    ]);
   });
 });
 

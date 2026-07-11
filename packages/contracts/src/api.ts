@@ -35,6 +35,7 @@ export const jsonValueSchema = z.json();
 export const errorDetailsSchema = z.record(z.string(), jsonValueSchema);
 
 export const errorEnvelopeSchema = z.strictObject({
+  schemaVersion: schemaVersionSchema,
   error: z.strictObject({
     code: nonBlankStringSchema,
     message: nonBlankStringSchema,

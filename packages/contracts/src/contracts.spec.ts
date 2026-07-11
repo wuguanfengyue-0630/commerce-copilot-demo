@@ -40,6 +40,18 @@ import {
 const observedAt = "2026-07-11T01:02:03.000Z";
 const money = { amountMinor: 12_800, currency: "CNY" } as const;
 
+const errorEnvelope = {
+  schemaVersion: 1,
+  error: {
+    code: "validation_error",
+    message: "Request validation failed",
+    details: {
+      field: "amount.amountMinor",
+      issue: { expected: "safe integer", received: 1.2 },
+    },
+  },
+} as const;
+
 const sessionResponse = {
   schemaVersion: 1,
   session: {
@@ -236,25 +248,25 @@ describe("shared API schemas", () => {
   });
 
   it("parses the uniform error envelope with JSON details", () => {
-    const result = errorEnvelopeSchema.parse({
-      error: {
-        code: "validation_error",
-        message: "Request validation failed",
-        details: {
-          field: "amount.amountMinor",
-          issue: { expected: "safe integer", received: 1.2 },
-        },
-      },
-    });
+    const result = errorEnvelopeSchema.parse(errorEnvelope);
 
     expect(result.error.code).toBe("validation_error");
+  });
+
+  it("requires schemaVersion 1 on error responses", () => {
+    const { schemaVersion: _schemaVersion, ...withoutVersion } = errorEnvelope;
+
+    expect(errorEnvelopeSchema.safeParse(withoutVersion).success).toBe(false);
+    expect(errorEnvelopeSchema.safeParse({ ...errorEnvelope, schemaVersion: 2 }).success).toBe(
+      false,
+    );
   });
 
   it("rejects unknown keys throughout the API contract", () => {
     expect(moneySchema.safeParse({ ...money, amountYuan: 128 }).success).toBe(false);
     expect(
       errorEnvelopeSchema.safeParse({
-        error: { code: "bad_request", message: "Bad request" },
+        ...errorEnvelope,
         debug: true,
       }).success,
     ).toBe(false);
