@@ -1,0 +1,12 @@
+{
+  "name": "@commerce-copilot/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@commerce-copilot/agent": "workspace:*",
+    "@commerce-copilot/application": "workspace:*",
+    "@commerce-copilot/connectors": "workspace:*",
+    "@commerce-copilot/contracts": "workspace:*"
+  }
+}

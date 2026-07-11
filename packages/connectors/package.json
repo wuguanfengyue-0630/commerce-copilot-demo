@@ -1,0 +1,10 @@
+{
+  "name": "@commerce-copilot/connectors",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@commerce-copilot/application": "workspace:*",
+    "@commerce-copilot/contracts": "workspace:*"
+  }
+}

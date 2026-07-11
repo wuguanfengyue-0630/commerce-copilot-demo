@@ -1,0 +1,30 @@
+{
+  "name": "commerce-copilot",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "24.14.1",
+    "pnpm": "11.7.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @commerce-copilot/api --filter @commerce-copilot/web --if-present run dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "test": "vitest run --config vitest.workspace.ts",
+    "test:watch": "vitest --config vitest.workspace.ts",
+    "test:e2e": "playwright test",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "verify:workspace": "node scripts/verify-workspace.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3",
+    "@playwright/test": "1.61.1",
+    "@types/node": "26.1.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}
