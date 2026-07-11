@@ -1,3 +1,4 @@
+import { ACTION_PROPOSAL_STATUSES } from "@commerce-copilot/domain";
 import { z } from "zod";
 
 import {
@@ -26,14 +27,7 @@ export const refundActionPayloadSchema = z.strictObject({
   observedOrder: observedOrderFactsSchema,
 });
 
-export const actionProposalStatusSchema = z.enum([
-  "pending_approval",
-  "approved",
-  "rejected",
-  "executing",
-  "succeeded",
-  "blocked",
-]);
+export const actionProposalStatusSchema = z.enum(ACTION_PROPOSAL_STATUSES);
 
 export const actionProposalSchema = z.strictObject({
   proposalId: identifierSchema,

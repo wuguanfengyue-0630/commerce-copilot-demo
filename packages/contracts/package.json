@@ -16,6 +16,7 @@
     "test": "vitest run --config ../../vitest.workspace.ts --project node packages/contracts"
   },
   "dependencies": {
+    "@commerce-copilot/domain": "workspace:*",
     "zod": "4.4.3"
   }
 }

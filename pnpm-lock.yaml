@@ -83,6 +83,9 @@ importers:
 
   packages/contracts:
     dependencies:
+      '@commerce-copilot/domain':
+        specifier: workspace:*
+        version: link:../domain
       zod:
         specifier: 4.4.3
         version: 4.4.3

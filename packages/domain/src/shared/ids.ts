@@ -18,11 +18,16 @@ export type KnowledgeChunkId = BrandedId<"KnowledgeChunkId">;
 export type AuditEventId = BrandedId<"AuditEventId">;
 
 function createId<Name extends string>(value: string): BrandedId<Name> {
-  if (typeof value !== "string" || value.trim().length === 0) {
+  if (typeof value !== "string") {
     throw new TypeError("ID must not be blank");
   }
 
-  return value as BrandedId<Name>;
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new TypeError("ID must not be blank");
+  }
+
+  return normalized as BrandedId<Name>;
 }
 
 export function createCompanyId(value: string): CompanyId {

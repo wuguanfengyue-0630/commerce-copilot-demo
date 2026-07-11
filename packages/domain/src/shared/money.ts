@@ -2,9 +2,12 @@ export const CURRENCIES = ["CNY"] as const;
 
 export type Currency = (typeof CURRENCIES)[number];
 
+declare const moneyBrand: unique symbol;
+
 export type Money = Readonly<{
   amountMinor: number;
   currency: Currency;
+  [moneyBrand]: true;
 }>;
 
 export function createMoney(amountMinor: number, currency: Currency): Money {
@@ -16,5 +19,5 @@ export function createMoney(amountMinor: number, currency: Currency): Money {
     throw new RangeError("Money currency must be CNY");
   }
 
-  return Object.freeze({ amountMinor, currency });
+  return Object.freeze({ amountMinor, currency }) as Money;
 }

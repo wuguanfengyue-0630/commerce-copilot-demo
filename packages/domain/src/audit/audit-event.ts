@@ -1,3 +1,4 @@
+import type { IsoTimestamp } from "../shared/clock.ts";
 import type { AuditEventId, CompanyId } from "../shared/ids.ts";
 
 export const AUDIT_EVENT_TYPES = [
@@ -14,11 +15,34 @@ export const AUDIT_EVENT_TYPES = [
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
+declare const auditEventBrand: unique symbol;
+
 export type AuditEvent = Readonly<{
   auditEventId: AuditEventId;
   companyId: CompanyId;
   correlationId: string;
   causationId: string;
   eventType: AuditEventType;
-  occurredAt: Date;
+  occurredAt: IsoTimestamp;
+  [auditEventBrand]: true;
 }>;
+
+export type AuditEventInput = {
+  auditEventId: AuditEventId;
+  companyId: CompanyId;
+  correlationId: string;
+  causationId: string;
+  eventType: AuditEventType;
+  occurredAt: IsoTimestamp;
+};
+
+export function createAuditEvent(input: AuditEventInput): AuditEvent {
+  return Object.freeze({
+    auditEventId: input.auditEventId,
+    companyId: input.companyId,
+    correlationId: input.correlationId,
+    causationId: input.causationId,
+    eventType: input.eventType,
+    occurredAt: input.occurredAt,
+  }) as AuditEvent;
+}

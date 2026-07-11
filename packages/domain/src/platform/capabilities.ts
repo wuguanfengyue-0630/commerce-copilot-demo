@@ -23,6 +23,15 @@ export const CAPABILITY_STATUSES = [
 
 export type CapabilityStatus = (typeof CAPABILITY_STATUSES)[number];
 
-export function hasCapability(status: CapabilityStatus): boolean {
-  return status === "available";
+export type CapabilityState = Readonly<{
+  capability: PlatformCapability;
+  status: CapabilityStatus;
+  reason?: string;
+}>;
+
+export function hasCapability(
+  states: readonly CapabilityState[],
+  capability: PlatformCapability,
+): boolean {
+  return states.some((state) => state.capability === capability && state.status === "available");
 }

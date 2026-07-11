@@ -1,16 +1,30 @@
+import {
+  ACTION_PROPOSAL_STATUSES,
+  CAPABILITY_STATUSES,
+  CURRENCIES,
+  MESSAGE_ORIGINS,
+  MESSAGE_ROLES,
+  ORDER_STATUSES,
+  PLATFORM_CAPABILITIES,
+} from "@commerce-copilot/domain";
 import { describe, expect, it } from "vitest";
 import {
   actionExecutionResultResponseSchema,
   actionProposalResponseSchema,
+  actionProposalStatusSchema,
   actionStatusResponseSchema,
   approvalDecisionSchema,
   refundActionPayloadSchema,
 } from "./actions.ts";
 import {
+  capabilityStatusSchema,
   conversationRoleSchema,
+  currencySchema,
   errorEnvelopeSchema,
+  identifierSchema,
   messageOriginSchema,
   moneySchema,
+  orderStatusSchema,
   platformCapabilitySchema,
 } from "./api.ts";
 import { settingsResponseSchema } from "./settings.ts";
@@ -198,6 +212,29 @@ const settingsResponse = {
 } as const;
 
 describe("shared API schemas", () => {
+  it("derives every shared enum from the domain canonical tuples", () => {
+    expect(currencySchema.options).toEqual(CURRENCIES);
+    expect(platformCapabilitySchema.options).toEqual(PLATFORM_CAPABILITIES);
+    expect(capabilityStatusSchema.options).toEqual(CAPABILITY_STATUSES);
+    expect(conversationRoleSchema.options).toEqual(MESSAGE_ROLES);
+    expect(messageOriginSchema.options).toEqual(MESSAGE_ORIGINS);
+    expect(orderStatusSchema.options).toEqual(ORDER_STATUSES);
+
+    for (const capability of PLATFORM_CAPABILITIES) {
+      expect(platformCapabilitySchema.safeParse(capability).success).toBe(true);
+    }
+  });
+
+  it("normalizes identifier whitespace at the HTTP boundary", () => {
+    const first = identifierSchema.parse("  order-1\t");
+    const second = identifierSchema.parse("\norder-1  ");
+    const orders = new Map([[first, "matched"]]);
+
+    expect(first).toBe("order-1");
+    expect(second).toBe(first);
+    expect(orders.get(second)).toBe("matched");
+  });
+
   it("parses the uniform error envelope with JSON details", () => {
     const result = errorEnvelopeSchema.parse({
       error: {
@@ -299,6 +336,17 @@ describe("workspace schemas", () => {
 });
 
 describe("action schemas", () => {
+  it("accepts only canonical proposal statuses", () => {
+    expect(actionProposalStatusSchema.options).toEqual(ACTION_PROPOSAL_STATUSES);
+
+    for (const status of ACTION_PROPOSAL_STATUSES) {
+      expect(actionProposalStatusSchema.safeParse(status).success).toBe(true);
+    }
+
+    expect(actionProposalStatusSchema.safeParse("succeeded").success).toBe(false);
+    expect(actionProposalStatusSchema.safeParse("blocked").success).toBe(false);
+  });
+
   it("parses refund payloads and proposal/status/decision/result DTOs", () => {
     const examples = [
       [refundActionPayloadSchema, refundAction],

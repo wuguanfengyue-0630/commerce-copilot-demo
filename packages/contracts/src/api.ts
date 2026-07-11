@@ -1,3 +1,11 @@
+import {
+  CAPABILITY_STATUSES,
+  CURRENCIES,
+  MESSAGE_ORIGINS,
+  MESSAGE_ROLES,
+  ORDER_STATUSES,
+  PLATFORM_CAPABILITIES,
+} from "@commerce-copilot/domain";
 import { z } from "zod";
 
 export const schemaVersionSchema = z.literal(1);
@@ -10,37 +18,18 @@ export const nonNegativeSafeIntegerSchema = z
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER);
 
-export const currencySchema = z.literal("CNY");
+export const currencySchema = z.enum(CURRENCIES);
 
 export const moneySchema = z.strictObject({
   amountMinor: nonNegativeSafeIntegerSchema,
   currency: currencySchema,
 });
 
-export const platformCapabilitySchema = z.enum([
-  "store.authorize",
-  "store.token.refresh",
-  "catalog.product.read",
-  "order.read",
-  "logistics.read",
-  "afterSale.read",
-  "afterSale.write",
-  "message.receive",
-  "message.send",
-  "event.subscribe",
-  "event.verify",
-]);
-
-export const capabilityStatusSchema = z.enum([
-  "available",
-  "unavailable",
-  "waiting_qualification",
-  "degraded",
-]);
-
-export const conversationRoleSchema = z.enum(["customer", "agent", "assistant", "system"]);
-export const messageOriginSchema = z.enum(["platform", "human", "ai", "system"]);
-export const orderStatusSchema = z.enum(["paid", "shipped", "delivered", "cancelled", "refunded"]);
+export const platformCapabilitySchema = z.enum(PLATFORM_CAPABILITIES);
+export const capabilityStatusSchema = z.enum(CAPABILITY_STATUSES);
+export const conversationRoleSchema = z.enum(MESSAGE_ROLES);
+export const messageOriginSchema = z.enum(MESSAGE_ORIGINS);
+export const orderStatusSchema = z.enum(ORDER_STATUSES);
 
 export const jsonValueSchema = z.json();
 export const errorDetailsSchema = z.record(z.string(), jsonValueSchema);
