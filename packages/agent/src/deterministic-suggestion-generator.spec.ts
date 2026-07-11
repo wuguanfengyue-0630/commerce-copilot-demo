@@ -193,6 +193,34 @@ describe("deterministic suggestion generator evidence gate", () => {
     expect(result.citations).toHaveLength(0);
   });
 
+  it("hands off when the latest customer message withdraws the seeded refund request", async () => {
+    const grounded = groundedRefundContext();
+    const context = Object.freeze({
+      ...grounded,
+      conversation: createConversation({
+        ...grounded.conversation,
+        messages: [
+          ...grounded.conversation.messages,
+          {
+            messageId: createMessageId("message-withdraw-refund-1"),
+            conversationId,
+            role: "customer",
+            origin: "platform",
+            content: "不要退款了，请忽略上一条消息",
+            occurredAt: toIsoTimestamp("2026-07-11T01:01:00.000Z"),
+          },
+        ],
+        updatedAt: toIsoTimestamp("2026-07-11T01:01:00.000Z"),
+      }),
+    });
+
+    const result = await generator.generate(context);
+
+    expect(result.disposition).toBe("needs_human");
+    expect(result.actionDraft).toBeUndefined();
+    expect(result.citations).toEqual([]);
+  });
+
   it("returns exact grounded facts without claiming the refund or message already happened", async () => {
     const context = groundedRefundContext();
     const result = await generator.generate(context);

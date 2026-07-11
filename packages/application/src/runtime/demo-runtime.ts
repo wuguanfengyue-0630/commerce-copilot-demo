@@ -36,7 +36,8 @@ export type DemoRuntime = Readonly<{
 
 export function createDemoRuntime(): DemoRuntime {
   let state = createSeedState();
-  let transactionActive = false;
+  let pendingTransactions = 0;
+  let transactionTail: Promise<void> = Promise.resolve();
 
   const repositories = createRepositories(() => state);
   const unitOfWork: ApplicationUnitOfWork = Object.freeze({
@@ -45,19 +46,23 @@ export function createDemoRuntime(): DemoRuntime {
       work: (repositories: ApplicationRepositories) => Promise<Result>,
     ): Promise<Result> {
       assertContext(context);
-      if (transactionActive) {
-        throw new DemoRuntimeError("DEMO_RUNTIME_TRANSACTION_ACTIVE");
-      }
-
-      transactionActive = true;
-      const stagedState = cloneState(state);
-      const stagedRepositories = createRepositories(() => stagedState);
-      try {
+      pendingTransactions += 1;
+      const operation = transactionTail.then(async () => {
+        const stagedState = cloneState(state);
+        const stagedRepositories = createRepositories(() => stagedState);
         const result = await work(stagedRepositories);
         state = stagedState;
         return result;
+      });
+      transactionTail = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      try {
+        return await operation;
       } finally {
-        transactionActive = false;
+        pendingTransactions -= 1;
       }
     },
   });
@@ -66,7 +71,7 @@ export function createDemoRuntime(): DemoRuntime {
     repositories,
     unitOfWork,
     reset(): void {
-      if (transactionActive) {
+      if (pendingTransactions > 0) {
         throw new DemoRuntimeError("DEMO_RUNTIME_TRANSACTION_ACTIVE");
       }
       state = createSeedState();

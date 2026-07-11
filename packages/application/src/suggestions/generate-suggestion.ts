@@ -100,7 +100,6 @@ export function createGenerateSuggestionUseCase(
       const operationContext = createOperationContext(command);
       const conversation = await loadConversation(dependencies, operationContext, command);
       assertConversationScope(command, conversation);
-      await rejectDuplicate(dependencies, operationContext, command);
 
       const order = await fetchLiveOrder(dependencies, command);
       assertOrderScope(command, order);
@@ -154,26 +153,6 @@ async function loadConversation(
     throw new GenerateSuggestionError("GENERATE_SUGGESTION_CONVERSATION_NOT_FOUND");
   }
   return conversation;
-}
-
-async function rejectDuplicate(
-  dependencies: CreateGenerateSuggestionDependencies,
-  context: OperationContext,
-  command: GenerateSuggestionCommand,
-): Promise<void> {
-  let existing: SuggestionRecord | null;
-  try {
-    existing = await dependencies.repositories.suggestions.findByCorrelation(
-      context,
-      command.conversationId,
-      command.correlationId,
-    );
-  } catch {
-    throw new GenerateSuggestionError("GENERATE_SUGGESTION_PERSIST_FAILED");
-  }
-  if (existing !== null) {
-    throw new GenerateSuggestionError("GENERATE_SUGGESTION_DUPLICATE_COMMAND");
-  }
 }
 
 async function fetchLiveOrder(
@@ -330,6 +309,15 @@ async function persistWorkflow(
 ): Promise<GenerateSuggestionResult> {
   try {
     return await dependencies.unitOfWork.run(context, async (repositories) => {
+      const existing = await repositories.suggestions.findByCorrelation(
+        context,
+        suggestion.conversationId,
+        suggestion.correlationId,
+      );
+      if (existing !== null) {
+        throw new GenerateSuggestionError("GENERATE_SUGGESTION_DUPLICATE_COMMAND");
+      }
+
       await repositories.suggestions.save(context, suggestion);
       if (proposal !== undefined) {
         await repositories.proposals.save(context, proposal);
@@ -376,7 +364,13 @@ async function persistWorkflow(
         ? Object.freeze({ ...resultIdentity, suggestion: persistedSuggestion })
         : Object.freeze({ ...resultIdentity, suggestion: persistedSuggestion, proposal });
     });
-  } catch {
+  } catch (error) {
+    if (
+      error instanceof GenerateSuggestionError &&
+      error.code === "GENERATE_SUGGESTION_DUPLICATE_COMMAND"
+    ) {
+      throw error;
+    }
     throw new GenerateSuggestionError("GENERATE_SUGGESTION_PERSIST_FAILED");
   }
 }

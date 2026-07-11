@@ -28,6 +28,7 @@ import type {
   SuggestionGenerationContext,
   SuggestionGenerationResult,
   SuggestionGenerator,
+  SuggestionRecord,
 } from "../index.ts";
 import { createDemoRuntime } from "../runtime/demo-runtime.ts";
 import {
@@ -70,10 +71,13 @@ function liveOrder(): OrderSnapshot {
   });
 }
 
-function groundedResult(context: SuggestionGenerationContext): SuggestionGenerationResult {
-  const citations = Object.freeze(
-    context.publishedKnowledge.flatMap((evidence) => evidence.citations),
-  );
+function groundedResult(
+  context: SuggestionGenerationContext,
+  withoutCitations = false,
+): SuggestionGenerationResult {
+  const citations = withoutCitations
+    ? Object.freeze([])
+    : Object.freeze(context.publishedKnowledge.flatMap((evidence) => evidence.citations));
 
   return Object.freeze({
     provider: "deterministic-demo",
@@ -105,7 +109,7 @@ function needsHumanResult(): SuggestionGenerationResult {
 }
 
 type HarnessOptions = Readonly<{
-  generatorResult?: "grounded" | "needs_human";
+  generatorResult?: "grounded" | "grounded_without_citations" | "needs_human";
   connectorError?: Error;
   generatorError?: Error;
   policyRules?: readonly (typeof enabledRefundRule)[];
@@ -116,6 +120,7 @@ type HarnessOptions = Readonly<{
 
 function createHarness(options: HarnessOptions = {}) {
   const calls: string[] = [];
+  const transactionCalls: string[] = [];
   const runtime = createDemoRuntime();
   const baseRepositories = options.repositories ?? runtime.repositories;
   const repositories: ApplicationRepositories = Object.freeze({
@@ -130,6 +135,17 @@ function createHarness(options: HarnessOptions = {}) {
       async search(query: PublishedKnowledgeSearch) {
         calls.push("search published knowledge");
         return baseRepositories.publishedKnowledge.search(query);
+      },
+    }),
+    suggestions: Object.freeze({
+      ...baseRepositories.suggestions,
+      async findByCorrelation(
+        context: OperationContext,
+        id: GenerateSuggestionCommand["conversationId"],
+        correlationId: string,
+      ) {
+        calls.push("lookup duplicate outside transaction");
+        return baseRepositories.suggestions.findByCorrelation(context, id, correlationId);
       },
     }),
   });
@@ -159,7 +175,7 @@ function createHarness(options: HarnessOptions = {}) {
       }
       return options.generatorResult === "needs_human"
         ? needsHumanResult()
-        : groundedResult(context);
+        : groundedResult(context, options.generatorResult === "grounded_without_citations");
     },
   });
   const baseUnitOfWork = options.unitOfWork ?? runtime.unitOfWork;
@@ -169,7 +185,31 @@ function createHarness(options: HarnessOptions = {}) {
       work: (repositories: ApplicationRepositories) => Promise<Result>,
     ): Promise<Result> {
       calls.push("persist atomically");
-      return baseUnitOfWork.run(context, work);
+      return baseUnitOfWork.run(context, (transactionRepositories) => {
+        const recordingRepositories: ApplicationRepositories = Object.freeze({
+          ...transactionRepositories,
+          suggestions: Object.freeze({
+            ...transactionRepositories.suggestions,
+            async findByCorrelation(
+              transactionContext: OperationContext,
+              id: GenerateSuggestionCommand["conversationId"],
+              correlationId: string,
+            ) {
+              transactionCalls.push("lookup duplicate");
+              return transactionRepositories.suggestions.findByCorrelation(
+                transactionContext,
+                id,
+                correlationId,
+              );
+            },
+            async save(transactionContext: OperationContext, record: SuggestionRecord) {
+              transactionCalls.push("save suggestion");
+              return transactionRepositories.suggestions.save(transactionContext, record);
+            },
+          }),
+        });
+        return work(recordingRepositories);
+      });
     },
   });
   const policyEvaluator = (input: ActionPolicyInput): PolicyEvaluation => {
@@ -190,6 +230,7 @@ function createHarness(options: HarnessOptions = {}) {
     calls,
     dependencies,
     runtime,
+    transactionCalls,
     useCase: createGenerateSuggestionUseCase(dependencies),
   };
 }
@@ -219,6 +260,18 @@ async function workflowCounts(runtime: ReturnType<typeof createDemoRuntime>) {
   };
 }
 
+async function captureSuggestionOutcome(operation: Promise<object>) {
+  try {
+    await operation;
+    return Object.freeze({ status: "fulfilled" as const });
+  } catch (error) {
+    if (!(error instanceof GenerateSuggestionError)) {
+      throw error;
+    }
+    return Object.freeze({ status: "rejected" as const, code: error.code });
+  }
+}
+
 describe("GenerateSuggestion", () => {
   it("calls boundaries in the exact grounded sequence and persists one atomic proposal timeline", async () => {
     const harness = createHarness();
@@ -233,6 +286,7 @@ describe("GenerateSuggestion", () => {
       "evaluate policy",
       "persist atomically",
     ]);
+    expect(harness.transactionCalls.slice(0, 2)).toEqual(["lookup duplicate", "save suggestion"]);
     expect(result).toMatchObject({
       companyId,
       storeId,
@@ -355,6 +409,21 @@ describe("GenerateSuggestion", () => {
     });
   });
 
+  it("rejects a grounded action draft without a published citation before workflow writes", async () => {
+    const harness = createHarness({ generatorResult: "grounded_without_citations" });
+
+    await expectSuggestionError(
+      harness.useCase.execute(command),
+      "GENERATE_SUGGESTION_GENERATOR_FAILED",
+    );
+
+    expect(await workflowCounts(harness.runtime)).toEqual({
+      suggestions: 0,
+      proposals: 0,
+      audits: 1,
+    });
+  });
+
   it("returns stable errors for a missing conversation and a command scope mismatch", async () => {
     const runtime = createDemoRuntime();
     const missingRepositories: ApplicationRepositories = Object.freeze({
@@ -448,6 +517,25 @@ describe("GenerateSuggestion", () => {
 
     expect(await workflowCounts(harness.runtime)).toEqual(firstCounts);
     expect(firstCounts).toEqual({ suggestions: 1, proposals: 1, audits: 4 });
+  });
+
+  it("serializes concurrent duplicate commands into one success and one duplicate conflict", async () => {
+    const harness = createHarness();
+
+    const outcomes = await Promise.all([
+      captureSuggestionOutcome(harness.useCase.execute(command)),
+      captureSuggestionOutcome(harness.useCase.execute(command)),
+    ]);
+
+    expect(outcomes).toEqual([
+      { status: "fulfilled" },
+      { status: "rejected", code: "GENERATE_SUGGESTION_DUPLICATE_COMMAND" },
+    ]);
+    expect(await workflowCounts(harness.runtime)).toEqual({
+      suggestions: 1,
+      proposals: 1,
+      audits: 4,
+    });
   });
 
   it("fails closed when the connector returns an order outside the command scope", async () => {

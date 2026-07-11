@@ -43,6 +43,9 @@ export function snapshotGroundedGenerationResult(
   if (result.actionDraft === undefined) {
     throw new Error("propose-action result omitted its action");
   }
+  if (citations.length === 0) {
+    throw new Error("propose-action result omitted its published citation");
+  }
   const actionDraft = snapshotGroundedAction(result.actionDraft, order);
   const base = {
     provider: "deterministic-demo" as const,

@@ -16,6 +16,7 @@ const DEMO_COMPANY_ID = "company-demo";
 const DEMO_STORE_ID = "store-douyin-demo";
 const DEMO_CONVERSATION_ID = "conversation-damaged-item-1";
 const DEMO_ORDER_ID = "order-delivered-12800";
+const DEMO_MESSAGE_ID = "message-damaged-item-1";
 const DEMO_MESSAGE = "商品破损，申请退款";
 
 export function createDeterministicSuggestionGenerator(): SuggestionGenerator {
@@ -183,15 +184,39 @@ function isExactDemoScenario(context: SuggestionGenerationContext): boolean {
     return false;
   }
 
-  return conversation.messages.some(
-    (message) =>
-      message !== null &&
-      message !== undefined &&
-      message.conversationId === conversation.conversationId &&
-      message.role === "customer" &&
-      message.origin === "platform" &&
-      message.content === DEMO_MESSAGE,
+  const latestCustomerMessage = findLatestCustomerMessage(conversation.messages);
+  return (
+    latestCustomerMessage !== undefined &&
+    latestCustomerMessage.messageId === DEMO_MESSAGE_ID &&
+    latestCustomerMessage.conversationId === conversation.conversationId &&
+    latestCustomerMessage.origin === "platform" &&
+    latestCustomerMessage.content === DEMO_MESSAGE
   );
+}
+
+function findLatestCustomerMessage(
+  messages: SuggestionGenerationContext["conversation"]["messages"],
+): SuggestionGenerationContext["conversation"]["messages"][number] | undefined {
+  let latest: SuggestionGenerationContext["conversation"]["messages"][number] | undefined;
+  let latestOccurredAt: IsoTimestamp | undefined;
+  let latestIsTied = false;
+
+  for (const message of messages) {
+    if (message === null || message === undefined || message.role !== "customer") {
+      continue;
+    }
+
+    const occurredAt = canonicalTimestamp(message.occurredAt);
+    if (latestOccurredAt === undefined || occurredAt > latestOccurredAt) {
+      latest = message;
+      latestOccurredAt = occurredAt;
+      latestIsTied = false;
+    } else if (occurredAt === latestOccurredAt) {
+      latestIsTied = true;
+    }
+  }
+
+  return latestIsTied ? undefined : latest;
 }
 
 function isGroundedDeliveredOrder(
