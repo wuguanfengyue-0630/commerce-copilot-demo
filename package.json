@@ -7,23 +7,24 @@
     "pnpm": "11.7.0"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @commerce-copilot/api --filter @commerce-copilot/web --if-present run dev",
-    "build": "pnpm -r --if-present build",
-    "typecheck": "pnpm -r --if-present typecheck",
+    "dev": "pnpm --parallel --filter @commerce-copilot/api --filter @commerce-copilot/web run dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "vitest run --config vitest.workspace.ts",
     "test:watch": "vitest --config vitest.workspace.ts",
     "test:e2e": "playwright test",
-    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "verify:workspace": "node scripts/verify-workspace.mjs"
+    "verify": "pnpm verify:workspace && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "verify:workspace": "node --test scripts/verify-workspace.test.mjs && node scripts/verify-workspace.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
     "@playwright/test": "1.61.1",
-    "@types/node": "26.1.1",
+    "@types/node": "24.13.3",
     "@vitest/coverage-v8": "4.1.10",
+    "jsdom": "29.1.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }

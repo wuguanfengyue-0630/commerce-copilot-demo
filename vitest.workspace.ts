@@ -1,13 +1,34 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  root: fileURLToPath(new URL(".", import.meta.url)),
   test: {
     passWithNoTests: true,
     projects: [
       {
         test: {
-          name: "workspace",
-          include: ["apps/**/*.{test,spec}.ts", "packages/**/*.{test,spec}.ts"],
+          name: "node",
+          environment: "node",
+          include: [
+            "apps/api/**/*.test.{ts,tsx}",
+            "apps/api/**/*.spec.{ts,tsx}",
+            "packages/{agent,application,connectors,contracts,domain}/**/*.test.{ts,tsx}",
+            "packages/{agent,application,connectors,contracts,domain}/**/*.spec.{ts,tsx}",
+          ],
+          passWithNoTests: true,
+        },
+      },
+      {
+        test: {
+          name: "web-ui",
+          environment: "jsdom",
+          include: [
+            "apps/web/**/*.test.{ts,tsx}",
+            "apps/web/**/*.spec.{ts,tsx}",
+            "packages/ui/**/*.test.{ts,tsx}",
+            "packages/ui/**/*.spec.{ts,tsx}",
+          ],
           passWithNoTests: true,
         },
       },
