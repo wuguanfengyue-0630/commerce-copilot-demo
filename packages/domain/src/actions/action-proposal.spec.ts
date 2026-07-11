@@ -153,6 +153,60 @@ describe("action proposal state machine", () => {
     expect(proposal.payload).not.toHaveProperty("connectorSecret");
   });
 
+  it("rejects a spread Money with a negative amount", () => {
+    const forgedAmount = {
+      ...createMoney(12_800, "CNY"),
+      amountMinor: -1,
+    };
+
+    expectTransitionError(
+      () =>
+        refundProposal({
+          payload: {
+            ...refundProposal().payload,
+            amount: forgedAmount,
+          },
+        }),
+      "ACTION_INVALID_PROPOSAL",
+    );
+  });
+
+  it("rejects a spread Money whose runtime currency is unsupported", () => {
+    const forgedAmount = { ...createMoney(12_800, "CNY") };
+    Object.defineProperty(forgedAmount, "currency", { value: "USD" });
+
+    expectTransitionError(
+      () =>
+        refundProposal({
+          payload: {
+            ...refundProposal().payload,
+            amount: forgedAmount,
+          },
+        }),
+      "ACTION_INVALID_PROPOSAL",
+    );
+  });
+
+  it("snapshots and freezes mutable refund amounts", () => {
+    const amount = { ...createMoney(12_800, "CNY") };
+    const observedRefundableAmount = { ...createMoney(12_800, "CNY") };
+
+    const proposal = refundProposal({
+      payload: {
+        ...refundProposal().payload,
+        amount,
+        observedRefundableAmount,
+      },
+    });
+    amount.amountMinor = 1;
+    observedRefundableAmount.amountMinor = 2;
+
+    expect(proposal.payload.amount).toEqual(createMoney(12_800, "CNY"));
+    expect(proposal.payload.observedRefundableAmount).toEqual(createMoney(12_800, "CNY"));
+    expect(Object.isFrozen(proposal.payload.amount)).toBe(true);
+    expect(Object.isFrozen(proposal.payload.observedRefundableAmount)).toBe(true);
+  });
+
   it.each([
     {
       createdAt: "2026-07-11T01:05:00.000Z",

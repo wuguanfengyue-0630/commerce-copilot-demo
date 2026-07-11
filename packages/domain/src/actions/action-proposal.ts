@@ -1,6 +1,6 @@
 import { type IsoTimestamp, toIsoTimestamp } from "../shared/clock.ts";
 import type { CompanyId, ConversationId, ProposalId, StoreId, UserId } from "../shared/ids.ts";
-import type { Money } from "../shared/money.ts";
+import { createMoney, type Money } from "../shared/money.ts";
 import { ACTION_PROPOSAL_STATUSES, type ActionProposalStatus } from "./action-status.ts";
 
 declare const actionProposalStateBrand: unique symbol;
@@ -138,14 +138,16 @@ export function createActionProposal(input: ActionProposalInput): PendingActionP
     throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
   }
 
+  const amount = snapshotMoney(input.payload.amount);
+  const observedRefundableAmount = snapshotMoney(input.payload.observedRefundableAmount);
   const payload = Object.freeze({
     kind: input.payload.kind,
     orderId: input.payload.orderId,
-    amount: input.payload.amount,
+    amount,
     reasonCode: input.payload.reasonCode,
     observedOrderVersion: input.payload.observedOrderVersion,
     observedOrderStatus: input.payload.observedOrderStatus,
-    observedRefundableAmount: input.payload.observedRefundableAmount,
+    observedRefundableAmount,
   });
 
   return sealProposal(
@@ -161,6 +163,14 @@ export function createActionProposal(input: ActionProposalInput): PendingActionP
     },
     "pending_approval",
   );
+}
+
+function snapshotMoney(money: Money): Money {
+  try {
+    return createMoney(money.amountMinor, money.currency);
+  } catch {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
 }
 
 export function approveProposal(
