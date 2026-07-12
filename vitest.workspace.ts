@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -20,6 +21,7 @@ export default defineConfig({
         },
       },
       {
+        plugins: [react()],
         test: {
           name: "web-ui",
           environment: "jsdom",
@@ -30,6 +32,7 @@ export default defineConfig({
             "packages/ui/**/*.spec.{ts,tsx}",
           ],
           passWithNoTests: true,
+          setupFiles: ["./test/setup-web.ts"],
         },
       },
     ],

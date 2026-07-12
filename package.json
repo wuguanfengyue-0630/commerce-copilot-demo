@@ -17,9 +17,13 @@
     "test:watch": "vitest --config vitest.workspace.ts",
     "test:e2e": "playwright test",
     "verify": "pnpm verify:workspace && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "verify:workspace": "node --test scripts/verify-workspace.test.mjs && node scripts/verify-workspace.mjs && node scripts/verify-package-imports.mjs"
+    "verify:workspace": "pnpm --filter @commerce-copilot/ui build && node --test scripts/verify-workspace.test.mjs && node scripts/verify-workspace.mjs && node scripts/verify-package-imports.mjs"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@vitejs/plugin-react": "6.0.3",
     "@biomejs/biome": "2.5.3",
     "@playwright/test": "1.61.1",
     "@types/node": "24.13.3",
