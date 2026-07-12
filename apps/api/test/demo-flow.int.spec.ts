@@ -140,7 +140,17 @@ describe("typed demo workflow API", () => {
         outcome: "approved",
         actor: { userId: "user-demo-supervisor", role: "supervisor" },
       },
-      proposal: { proposalId, status: "approved", version: 2 },
+      proposal: {
+        proposalId,
+        status: "approved",
+        version: 2,
+        approval: {
+          actor: { userId: "user-demo-supervisor", role: "supervisor" },
+          approvedAt: "2026-07-11T01:15:00.000Z",
+        },
+        rejection: null,
+        execution: null,
+      },
     });
 
     const staleDecision = await server.inject({
@@ -170,6 +180,35 @@ describe("typed demo workflow API", () => {
     });
     expect(repeatedExecution.statusCode).toBe(201);
     expect(repeatedExecution.json()).toEqual(execution.json());
+
+    const completedDetail = await server.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${conversationId}`,
+    });
+    expect(completedDetail.json().conversation.proposal).toMatchObject({
+      status: "executed",
+      approval: { actor: { userId: "user-demo-supervisor", role: "supervisor" } },
+      rejection: null,
+      execution: {
+        status: "succeeded",
+        executionId: "mock-execution-0001",
+        completedAt: "2026-07-11T01:20:00.000Z",
+      },
+    });
+
+    const completedApprovals = await server.inject({ method: "GET", url: "/api/v1/approvals" });
+    expect(completedApprovals.json()).toMatchObject({
+      pending: [],
+      history: [
+        {
+          proposalId,
+          proposalVersion: 1,
+          outcome: "approved",
+          actor: { userId: "user-demo-supervisor", role: "supervisor" },
+          comment: expect.any(String),
+        },
+      ],
+    });
 
     const audit = await server.inject({
       method: "GET",
@@ -277,5 +316,317 @@ describe("typed demo workflow API", () => {
       },
     });
     expect(approvalSchema.properties).not.toHaveProperty("actor");
+
+    const workspaceSchema = responseSchema(document, "/api/v1/workspace", "get", "200");
+    const workspaceModel = requiredObject(workspaceSchema, "workspace");
+    expectRequired(workspaceModel, [
+      "companyId",
+      "storeId",
+      "metrics",
+      "integrations",
+      "activeRules",
+      "messageSendMode",
+      "demoModel",
+      "evaluationSummary",
+      "setup",
+    ]);
+    expectRequired(requiredObject(workspaceModel, "metrics"), [
+      "openConversations",
+      "waitingForAgent",
+      "assistantSuggestions",
+      "proposalsAwaitingApproval",
+      "refundedAmount",
+      "measuredAt",
+    ]);
+    expectRequired(arrayItem(workspaceModel, "integrations"), [
+      "storeId",
+      "platform",
+      "displayName",
+      "status",
+      "capabilities",
+    ]);
+    expectRequired(arrayItem(workspaceModel, "activeRules"), [
+      "kind",
+      "enabled",
+      "requiresApproval",
+      "requiredRole",
+    ]);
+    expectRequired(requiredObject(workspaceModel, "evaluationSummary"), [
+      "scenario",
+      "status",
+      "score",
+    ]);
+    expectRequired(requiredObject(workspaceModel, "setup"), ["status", "acceptedAt"]);
+
+    const detailSchema = responseSchema(
+      document,
+      "/api/v1/conversations/{conversationId}",
+      "get",
+      "200",
+    );
+    const conversation = requiredObject(detailSchema, "conversation");
+    expectRequired(conversation, [
+      "companyId",
+      "storeId",
+      "conversationId",
+      "customer",
+      "status",
+      "lastMessagePreview",
+      "unreadCount",
+      "updatedAt",
+      "messages",
+      "order",
+      "latestSuggestion",
+      "citations",
+      "proposal",
+    ]);
+    expectRequired(arrayItem(conversation, "messages"), [
+      "messageId",
+      "role",
+      "origin",
+      "content",
+      "occurredAt",
+    ]);
+    expectRequired(requiredObject(conversation, "order"), [
+      "companyId",
+      "storeId",
+      "orderId",
+      "version",
+      "status",
+      "total",
+      "refundable",
+      "updatedAt",
+    ]);
+    expectRequired(nullableVariant(propertySchema(conversation, "latestSuggestion")), [
+      "suggestionId",
+      "companyId",
+      "storeId",
+      "conversationId",
+      "orderId",
+      "provider",
+      "disposition",
+      "suggestedReply",
+      "citations",
+      "createdAt",
+    ]);
+    expectRequired(arrayItem(conversation, "citations"), [
+      "releaseId",
+      "chunkId",
+      "sourceTitle",
+      "excerpt",
+      "version",
+    ]);
+
+    const proposal = nullableVariant(propertySchema(conversation, "proposal"));
+    expectRequired(proposal, [
+      "proposalId",
+      "version",
+      "companyId",
+      "storeId",
+      "conversationId",
+      "action",
+      "status",
+      "createdAt",
+      "expiresAt",
+      "approval",
+      "rejection",
+      "execution",
+    ]);
+    expectRequired(requiredObject(proposal, "action"), [
+      "kind",
+      "orderId",
+      "amount",
+      "reasonCode",
+      "observedOrder",
+    ]);
+
+    const approvalsSchema = responseSchema(document, "/api/v1/approvals", "get", "200");
+    expectRequired(arrayItem(approvalsSchema, "history"), [
+      "proposalId",
+      "proposalVersion",
+      "outcome",
+      "actor",
+      "decidedAt",
+    ]);
+
+    const executionSchema = responseSchema(
+      document,
+      "/api/v1/actions/{proposalId}/execute",
+      "post",
+      "201",
+    );
+    expect(propertySchema(executionSchema, "result").oneOf).toHaveLength(2);
+
+    const auditSchema = responseSchema(document, "/api/v1/audit-events", "get", "200");
+    expectRequired(arrayItem(auditSchema, "events"), [
+      "auditEventId",
+      "companyId",
+      "correlationId",
+      "causationId",
+      "eventType",
+      "occurredAt",
+    ]);
+
+    const knowledgeSchema = responseSchema(document, "/api/v1/knowledge", "get", "200");
+    const policy = arrayItem(knowledgeSchema, "policies");
+    expectRequired(policy, [
+      "policyId",
+      "title",
+      "status",
+      "scenario",
+      "content",
+      "refundRule",
+      "citations",
+      "release",
+    ]);
+    expectRequired(requiredObject(policy, "release"), [
+      "releaseId",
+      "version",
+      "publishedAt",
+      "expiresAt",
+      "immutable",
+    ]);
+  });
+
+  it("resets repositories and connector effects before replaying the full workflow", async () => {
+    const server = await openDemoApp();
+    const first = await approveAndExecute(server, "approved");
+    expect(first.execution.statusCode).toBe(201);
+    expect(first.execution.json().result.executionId).toBe("mock-execution-0001");
+
+    await reset(server);
+    const seededAudit = await server.inject({
+      method: "GET",
+      url: `/api/v1/audit-events?conversationId=${conversationId}`,
+    });
+    expect(
+      seededAudit.json().events.map((event: { eventType: string }) => event.eventType),
+    ).toEqual(["conversation.message_ingested"]);
+
+    const replay = await approveAndExecute(server, "approved");
+    expect(replay.execution.statusCode).toBe(201);
+    expect(replay.execution.json().result.executionId).toBe("mock-execution-0001");
+  });
+
+  it("isolates workflow mutation between concurrently created apps", async () => {
+    const first = await openDemoApp();
+    const second = await openDemoApp();
+
+    const mutated = await first.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${conversationId}/suggestions`,
+    });
+    expect(mutated.statusCode).toBe(201);
+
+    const firstApprovals = await first.inject({ method: "GET", url: "/api/v1/approvals" });
+    const secondApprovals = await second.inject({ method: "GET", url: "/api/v1/approvals" });
+    expect(firstApprovals.json().pending).toHaveLength(1);
+    expect(secondApprovals.json()).toMatchObject({ pending: [], history: [] });
+  });
+
+  it("does not execute or audit execution after a rejection", async () => {
+    const server = await openDemoApp();
+    const rejected = await approveAndExecute(server, "rejected");
+
+    expect(rejected.execution.statusCode).toBe(409);
+    const audit = await server.inject({
+      method: "GET",
+      url: `/api/v1/audit-events?conversationId=${conversationId}`,
+    });
+    expect(audit.json().events.map((event: { eventType: string }) => event.eventType)).toEqual([
+      "conversation.message_ingested",
+      "knowledge.retrieved",
+      "agent.suggestion_generated",
+      "action.proposed",
+      "approval.rejected",
+    ]);
   });
 });
+
+async function approveAndExecute(
+  server: Awaited<ReturnType<typeof openDemoApp>>,
+  outcome: "approved" | "rejected",
+) {
+  const suggestion = await server.inject({
+    method: "POST",
+    url: `/api/v1/conversations/${conversationId}/suggestions`,
+  });
+  expect(suggestion.statusCode).toBe(201);
+  const proposalId = suggestion.json().proposal.proposalId as string;
+  const decision = await server.inject({
+    method: "POST",
+    url: `/api/v1/approvals/${proposalId}/decisions`,
+    payload: { outcome, proposalVersion: 1 },
+  });
+  expect(decision.statusCode).toBe(201);
+  const execution = await server.inject({
+    method: "POST",
+    url: `/api/v1/actions/${proposalId}/execute`,
+  });
+  return { proposalId, decision, execution };
+}
+
+type OpenApiSchema = {
+  type?: string;
+  nullable?: boolean;
+  required?: string[];
+  properties: Record<string, OpenApiSchema>;
+  items?: OpenApiSchema;
+  oneOf?: OpenApiSchema[];
+};
+
+type OpenApiDocument = {
+  paths: Record<
+    string,
+    Record<
+      string,
+      {
+        responses: Record<string, { content: { "application/json": { schema: OpenApiSchema } } }>;
+      }
+    >
+  >;
+};
+
+function responseSchema(
+  document: OpenApiDocument,
+  path: string,
+  method: "get" | "post",
+  status: string,
+): OpenApiSchema {
+  const operation = document.paths[path]?.[method];
+  const response = operation?.responses[status];
+  if (response === undefined)
+    throw new Error(`Missing OpenAPI response ${method} ${path} ${status}`);
+  return response.content["application/json"].schema;
+}
+
+function expectRequired(schema: OpenApiSchema, fields: string[]): void {
+  expect(schema.type).toBe("object");
+  expect(schema.required).toEqual(expect.arrayContaining(fields));
+  expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(fields));
+}
+
+function requiredObject(schema: OpenApiSchema, property: string): OpenApiSchema {
+  const nested = propertySchema(schema, property);
+  expect(nested).toBeDefined();
+  return nested as OpenApiSchema;
+}
+
+function propertySchema(schema: OpenApiSchema, property: string): OpenApiSchema {
+  const nested = schema.properties[property];
+  if (nested === undefined) throw new Error(`Missing OpenAPI property ${property}`);
+  return nested;
+}
+
+function arrayItem(schema: OpenApiSchema, property: string): OpenApiSchema {
+  const array = requiredObject(schema, property);
+  expect(array.type).toBe("array");
+  expect(array.items).toBeDefined();
+  return array.items as OpenApiSchema;
+}
+
+function nullableVariant(schema: OpenApiSchema): OpenApiSchema {
+  expect(schema.nullable).toBe(true);
+  expect(schema.type).toBe("object");
+  return schema;
+}

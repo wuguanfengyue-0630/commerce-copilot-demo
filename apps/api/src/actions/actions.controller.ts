@@ -1,6 +1,7 @@
 import { Bind, Body, Controller, HttpCode, Inject, Param, Post } from "@nestjs/common";
 import { ApiCreatedResponse, ApiParam, ApiTags } from "@nestjs/swagger";
 import {
+  asOpenApiSchema,
   emptyCommandBodySchema,
   executionResponseOpenApiSchema,
   ProposalParamsDto,
@@ -20,7 +21,7 @@ export class ActionsController {
   )
   @HttpCode(201)
   @ApiParam({ name: "proposalId", type: String })
-  @ApiCreatedResponse({ schema: executionResponseOpenApiSchema })
+  @ApiCreatedResponse({ schema: asOpenApiSchema(executionResponseOpenApiSchema) })
   execute(params: ProposalParamsDto, _body: undefined | Record<string, never>) {
     return this.workflow.execute(params.proposalId);
   }

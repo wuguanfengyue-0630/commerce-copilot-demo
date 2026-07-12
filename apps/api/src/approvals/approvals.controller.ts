@@ -4,6 +4,7 @@ import {
   ApprovalDecisionDto,
   approvalDecisionOpenApiSchema,
   approvalsResponseOpenApiSchema,
+  asOpenApiSchema,
   decisionResponseOpenApiSchema,
   ProposalParamsDto,
 } from "../common/workflow-dtos.ts";
@@ -16,7 +17,7 @@ export class ApprovalsController {
   @Inject(DEMO_WORKFLOW) private readonly workflow!: DemoWorkflow;
 
   @Get()
-  @ApiOkResponse({ schema: approvalsResponseOpenApiSchema })
+  @ApiOkResponse({ schema: asOpenApiSchema(approvalsResponseOpenApiSchema) })
   list() {
     return this.workflow.approvals();
   }
@@ -28,8 +29,8 @@ export class ApprovalsController {
   )
   @HttpCode(201)
   @ApiParam({ name: "proposalId", type: String })
-  @ApiBody({ schema: approvalDecisionOpenApiSchema })
-  @ApiCreatedResponse({ schema: decisionResponseOpenApiSchema })
+  @ApiBody({ schema: asOpenApiSchema(approvalDecisionOpenApiSchema) })
+  @ApiCreatedResponse({ schema: asOpenApiSchema(decisionResponseOpenApiSchema) })
   decide(params: ProposalParamsDto, body: ApprovalDecisionDto) {
     return this.workflow.decide(params.proposalId, body);
   }

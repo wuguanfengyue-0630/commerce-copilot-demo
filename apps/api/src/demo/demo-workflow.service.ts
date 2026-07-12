@@ -1,11 +1,13 @@
 import { createDeterministicSuggestionGenerator } from "@commerce-copilot/agent";
 import {
   type ApprovalDecisionRecord,
+  type CommerceConnector,
   createDecideApprovalUseCase,
   createExecuteActionUseCase,
   createGenerateSuggestionUseCase,
   type DemoRuntime,
   type OperationContext,
+  type SuggestionRecord,
 } from "@commerce-copilot/application";
 import {
   createMockCommerceConnector,
@@ -47,15 +49,38 @@ export type DemoSetupState =
   | Readonly<{ status: "complete"; acceptedAt: string }>;
 
 export class DemoWorkflow {
-  private connector: MockCommerceConnector;
+  private readonly connector: ResettableCommerceConnector;
+  private readonly decideApprovalUseCase: ReturnType<typeof createDecideApprovalUseCase>;
+  private readonly executeActionUseCase: ReturnType<typeof createExecuteActionUseCase>;
+  private readonly generateSuggestionUseCase: ReturnType<typeof createGenerateSuggestionUseCase>;
 
   constructor(private readonly runtime: DemoRuntime) {
-    this.connector = this.createConnector();
+    this.connector = new ResettableCommerceConnector();
+    this.generateSuggestionUseCase = createGenerateSuggestionUseCase({
+      repositories: this.runtime.repositories,
+      unitOfWork: this.runtime.unitOfWork,
+      commerceConnector: this.connector,
+      suggestionGenerator: createDeterministicSuggestionGenerator(),
+      clock: new FixedClock(new Date("2026-07-11T01:10:00.000Z")),
+      policyRules: refundRules,
+      policyEvaluator: evaluateActionPolicy,
+    });
+    this.decideApprovalUseCase = createDecideApprovalUseCase({
+      repositories: this.runtime.repositories,
+      unitOfWork: this.runtime.unitOfWork,
+      clock: new FixedClock(new Date("2026-07-11T01:15:00.000Z")),
+    });
+    this.executeActionUseCase = createExecuteActionUseCase({
+      repositories: this.runtime.repositories,
+      unitOfWork: this.runtime.unitOfWork,
+      commerceConnector: this.connector,
+      clock: new FixedClock(new Date("2026-07-11T01:20:00.000Z")),
+    });
   }
 
   reset(): void {
     this.runtime.reset();
-    this.connector = this.createConnector();
+    this.connector.reset();
   }
 
   async workspace(setup: DemoSetupState) {
@@ -160,7 +185,7 @@ export class DemoWorkflow {
           ({ conversationId: _conversationId, ...message }) => message,
         ),
         order,
-        latestSuggestion,
+        latestSuggestion: latestSuggestion === null ? null : presentSuggestion(latestSuggestion),
         citations: latestSuggestion?.citations ?? [],
         proposal: proposal === undefined ? null : presentProposal(proposal),
       },
@@ -170,16 +195,7 @@ export class DemoWorkflow {
   async generateSuggestion(rawConversationId: string) {
     const conversationId = createConversationId(rawConversationId);
     const conversation = await this.loadConversation(conversationId);
-    const useCase = createGenerateSuggestionUseCase({
-      repositories: this.runtime.repositories,
-      unitOfWork: this.runtime.unitOfWork,
-      commerceConnector: this.connector,
-      suggestionGenerator: createDeterministicSuggestionGenerator(),
-      clock: new FixedClock(new Date("2026-07-11T01:10:00.000Z")),
-      policyRules: refundRules,
-      policyEvaluator: evaluateActionPolicy,
-    });
-    const result = await useCase.execute({
+    const result = await this.generateSuggestionUseCase.execute({
       companyId,
       storeId,
       conversationId,
@@ -190,7 +206,7 @@ export class DemoWorkflow {
     });
     return {
       schemaVersion: SCHEMA_VERSION,
-      suggestion: result.suggestion,
+      suggestion: presentSuggestion(result.suggestion),
       proposal: result.proposal === undefined ? null : presentProposal(result.proposal),
     };
   }
@@ -218,11 +234,7 @@ export class DemoWorkflow {
 
   async decide(rawProposalId: string, input: ApprovalDecisionInput) {
     const proposalId = createProposalId(rawProposalId);
-    const result = await createDecideApprovalUseCase({
-      repositories: this.runtime.repositories,
-      unitOfWork: this.runtime.unitOfWork,
-      clock: new FixedClock(new Date("2026-07-11T01:15:00.000Z")),
-    }).execute({
+    const result = await this.decideApprovalUseCase.execute({
       companyId,
       proposalId,
       proposalVersion: input.proposalVersion,
@@ -241,12 +253,7 @@ export class DemoWorkflow {
 
   async execute(rawProposalId: string) {
     const proposalId = createProposalId(rawProposalId);
-    const result = await createExecuteActionUseCase({
-      repositories: this.runtime.repositories,
-      unitOfWork: this.runtime.unitOfWork,
-      commerceConnector: this.connector,
-      clock: new FixedClock(new Date("2026-07-11T01:20:00.000Z")),
-    }).execute({
+    const result = await this.executeActionUseCase.execute({
       companyId,
       proposalId,
       actor: supervisor,
@@ -293,7 +300,7 @@ export class DemoWorkflow {
           releaseId: policy.releaseId,
           version: policy.version,
           publishedAt: policy.publishedAt,
-          expiresAt: policy.expiresAt,
+          expiresAt: policy.expiresAt ?? null,
           immutable: true,
         },
       })),
@@ -337,10 +344,34 @@ export class DemoWorkflow {
     if (conversation === null) throw new NotFoundException("Conversation not found");
     return conversation;
   }
+}
 
-  private createConnector(): MockCommerceConnector {
-    return createMockCommerceConnector(new FixedClock(new Date("2026-07-11T01:20:00.000Z")));
+class ResettableCommerceConnector implements CommerceConnector {
+  private delegate: MockCommerceConnector = createConnector();
+
+  reset(): void {
+    this.delegate = createConnector();
   }
+
+  getCapabilities(...args: Parameters<CommerceConnector["getCapabilities"]>) {
+    return this.delegate.getCapabilities(...args);
+  }
+
+  getOrder(...args: Parameters<CommerceConnector["getOrder"]>) {
+    return this.delegate.getOrder(...args);
+  }
+
+  executeAction(...args: Parameters<CommerceConnector["executeAction"]>) {
+    return this.delegate.executeAction(...args);
+  }
+
+  findActionResult(...args: Parameters<CommerceConnector["findActionResult"]>) {
+    return this.delegate.findActionResult(...args);
+  }
+}
+
+function createConnector(): MockCommerceConnector {
+  return createMockCommerceConnector(new FixedClock(new Date("2026-07-11T01:20:00.000Z")));
 }
 
 function context(correlationId: string, causationId: string): OperationContext {
@@ -357,7 +388,7 @@ function presentDecision(decision: ApprovalDecisionRecord) {
     proposalVersion: decision.proposalVersion,
     outcome: decision.decision,
     actor: { userId: decision.actor.userId, role: decision.actor.role },
-    ...(decision.comment === undefined ? {} : { comment: decision.comment }),
+    comment: decision.comment ?? null,
     decidedAt: decision.decidedAt,
   };
 }
@@ -383,5 +414,73 @@ function presentProposal(proposal: ActionProposal) {
     status: proposal.status,
     createdAt: proposal.createdAt,
     expiresAt: proposal.expiresAt,
+    approval:
+      "approval" in proposal
+        ? {
+            actor: {
+              userId: proposal.approval.approvedBy.userId,
+              role: proposal.approval.approvedBy.role,
+            },
+            approvedAt: proposal.approval.approvedAt,
+          }
+        : null,
+    rejection:
+      proposal.status === "rejected"
+        ? {
+            actor: {
+              userId: proposal.rejection.rejectedBy.userId,
+              role: proposal.rejection.rejectedBy.role,
+            },
+            rejectedAt: proposal.rejection.rejectedAt,
+          }
+        : null,
+    execution: presentProposalExecution(proposal),
+  };
+}
+
+function presentProposalExecution(proposal: ActionProposal) {
+  if (proposal.status === "executed") {
+    return {
+      status: "succeeded" as const,
+      startedAt: proposal.executionStartedAt,
+      executionId: proposal.executionResult.executionId,
+      completedAt: proposal.executionResult.executedAt,
+    };
+  }
+  if (proposal.status === "executing") {
+    return {
+      status: "started" as const,
+      startedAt: proposal.executionStartedAt,
+      executionId: null,
+      completedAt: null,
+    };
+  }
+  if (proposal.status === "needs_human") {
+    return {
+      status: "needs_human" as const,
+      startedAt: proposal.executionStartedAt ?? null,
+      reason: proposal.needsHuman.reason,
+      markedAt: proposal.needsHuman.markedAt,
+    };
+  }
+  return null;
+}
+
+function presentSuggestion(suggestion: SuggestionRecord) {
+  return {
+    suggestionId: suggestion.suggestionId,
+    companyId: suggestion.companyId,
+    storeId: suggestion.storeId,
+    conversationId: suggestion.conversationId,
+    orderId: suggestion.orderId,
+    correlationId: suggestion.correlationId,
+    causationId: suggestion.causationId,
+    provider: suggestion.provider,
+    disposition: suggestion.disposition,
+    suggestedReply: suggestion.suggestedReply,
+    citations: suggestion.citations,
+    actionDraft: suggestion.actionDraft ?? null,
+    reason: suggestion.reason ?? null,
+    createdAt: suggestion.createdAt,
   };
 }

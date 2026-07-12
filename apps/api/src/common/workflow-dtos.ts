@@ -1,3 +1,4 @@
+import type { ApiResponseOptions } from "@nestjs/swagger";
 import { z } from "zod";
 
 const identifier = z.string().trim().min(1);
@@ -31,254 +32,562 @@ export class ApprovalDecisionDto {
 
 export const emptyCommandBodySchema = z.union([z.undefined(), z.strictObject({})]);
 
-export const approvalDecisionOpenApiSchema = {
-  type: "object" as const,
-  additionalProperties: false,
-  required: ["outcome", "proposalVersion"],
-  properties: {
+type Schema = Readonly<Record<string, unknown>>;
+type SwaggerSchema = Extract<ApiResponseOptions, { schema: unknown }>["schema"];
+
+export function asOpenApiSchema(schema: Schema): SwaggerSchema {
+  return schema as SwaggerSchema;
+}
+
+function objectSchema<const Properties extends Readonly<Record<string, Schema>>>(
+  properties: Properties,
+  required: readonly (keyof Properties & string)[],
+) {
+  return {
+    type: "object" as const,
+    additionalProperties: false,
+    required,
+    properties,
+  };
+}
+
+function arraySchema(items: Schema) {
+  return { type: "array" as const, items };
+}
+
+function nullableSchema(schema: Schema) {
+  return { ...schema, nullable: true as const };
+}
+
+const idSchema = { type: "string" as const, minLength: 1 };
+const stringSchema = { type: "string" as const };
+const dateTimeSchema = { type: "string" as const, format: "date-time" };
+const positiveIntegerSchema = { type: "integer" as const, minimum: 1 };
+const nonNegativeIntegerSchema = { type: "integer" as const, minimum: 0 };
+const booleanSchema = { type: "boolean" as const };
+const currencySchema = { type: "string" as const, enum: ["CNY"] };
+
+const moneySchema = objectSchema(
+  { amountMinor: nonNegativeIntegerSchema, currency: currencySchema },
+  ["amountMinor", "currency"],
+);
+
+const actorSchema = objectSchema(
+  {
+    userId: idSchema,
+    role: { type: "string" as const, enum: ["supervisor", "admin"] },
+  },
+  ["userId", "role"],
+);
+
+const citationSchema = objectSchema(
+  {
+    releaseId: idSchema,
+    chunkId: idSchema,
+    sourceTitle: stringSchema,
+    excerpt: stringSchema,
+    version: positiveIntegerSchema,
+  },
+  ["releaseId", "chunkId", "sourceTitle", "excerpt", "version"],
+);
+
+const messageSchema = objectSchema(
+  {
+    messageId: idSchema,
+    role: { type: "string" as const, enum: ["customer", "agent", "assistant", "system"] },
+    origin: { type: "string" as const, enum: ["platform", "human", "ai", "system"] },
+    content: stringSchema,
+    externalMessageId: idSchema,
+    occurredAt: dateTimeSchema,
+  },
+  ["messageId", "role", "origin", "content", "occurredAt"],
+);
+
+const orderSchema = objectSchema(
+  {
+    companyId: idSchema,
+    storeId: idSchema,
+    orderId: idSchema,
+    version: positiveIntegerSchema,
+    status: {
+      type: "string" as const,
+      enum: ["paid", "shipped", "delivered", "cancelled", "refunded"],
+    },
+    total: moneySchema,
+    refundable: moneySchema,
+    updatedAt: dateTimeSchema,
+  },
+  ["companyId", "storeId", "orderId", "version", "status", "total", "refundable", "updatedAt"],
+);
+
+const observedOrderSchema = objectSchema(
+  {
+    version: positiveIntegerSchema,
+    status: { type: "string" as const, enum: ["paid", "shipped", "delivered"] },
+    refundable: moneySchema,
+  },
+  ["version", "status", "refundable"],
+);
+
+const proposalActionSchema = objectSchema(
+  {
+    kind: { type: "string" as const, enum: ["after_sale.refund"] },
+    orderId: idSchema,
+    amount: moneySchema,
+    reasonCode: { type: "string" as const, enum: ["damaged_item"] },
+    observedOrder: observedOrderSchema,
+  },
+  ["kind", "orderId", "amount", "reasonCode", "observedOrder"],
+);
+
+const suggestionActionDraftSchema = objectSchema(
+  {
+    kind: { type: "string" as const, enum: ["after_sale.refund"] },
+    orderId: idSchema,
+    amount: moneySchema,
+    reasonCode: { type: "string" as const, enum: ["damaged_item"] },
+    observedOrderVersion: positiveIntegerSchema,
+    observedOrderStatus: { type: "string" as const, enum: ["paid", "shipped", "delivered"] },
+    observedRefundableAmount: moneySchema,
+  },
+  [
+    "kind",
+    "orderId",
+    "amount",
+    "reasonCode",
+    "observedOrderVersion",
+    "observedOrderStatus",
+    "observedRefundableAmount",
+  ],
+);
+
+const suggestionSchema = objectSchema(
+  {
+    suggestionId: idSchema,
+    companyId: idSchema,
+    storeId: idSchema,
+    conversationId: idSchema,
+    orderId: idSchema,
+    correlationId: idSchema,
+    causationId: idSchema,
+    provider: { type: "string" as const, enum: ["deterministic-demo"] },
+    disposition: { type: "string" as const, enum: ["propose_action", "needs_human"] },
+    suggestedReply: stringSchema,
+    citations: arraySchema(citationSchema),
+    actionDraft: nullableSchema(suggestionActionDraftSchema),
+    reason: nullableSchema(stringSchema),
+    createdAt: dateTimeSchema,
+  },
+  [
+    "suggestionId",
+    "companyId",
+    "storeId",
+    "conversationId",
+    "orderId",
+    "correlationId",
+    "causationId",
+    "provider",
+    "disposition",
+    "suggestedReply",
+    "citations",
+    "actionDraft",
+    "reason",
+    "createdAt",
+  ],
+);
+
+const proposalApprovalSchema = objectSchema({ actor: actorSchema, approvedAt: dateTimeSchema }, [
+  "actor",
+  "approvedAt",
+]);
+const proposalRejectionSchema = objectSchema({ actor: actorSchema, rejectedAt: dateTimeSchema }, [
+  "actor",
+  "rejectedAt",
+]);
+const startedExecutionSchema = objectSchema(
+  {
+    status: { type: "string" as const, enum: ["started"] },
+    startedAt: dateTimeSchema,
+    executionId: nullableSchema(idSchema),
+    completedAt: nullableSchema(dateTimeSchema),
+  },
+  ["status", "startedAt", "executionId", "completedAt"],
+);
+const succeededProposalExecutionSchema = objectSchema(
+  {
+    status: { type: "string" as const, enum: ["succeeded"] },
+    startedAt: dateTimeSchema,
+    executionId: idSchema,
+    completedAt: dateTimeSchema,
+  },
+  ["status", "startedAt", "executionId", "completedAt"],
+);
+const needsHumanProposalExecutionSchema = objectSchema(
+  {
+    status: { type: "string" as const, enum: ["needs_human"] },
+    startedAt: nullableSchema(dateTimeSchema),
+    reason: stringSchema,
+    markedAt: dateTimeSchema,
+  },
+  ["status", "startedAt", "reason", "markedAt"],
+);
+const proposalExecutionSchema = {
+  oneOf: [
+    startedExecutionSchema,
+    succeededProposalExecutionSchema,
+    needsHumanProposalExecutionSchema,
+  ],
+  nullable: true as const,
+};
+
+const proposalSchema = objectSchema(
+  {
+    proposalId: idSchema,
+    version: positiveIntegerSchema,
+    companyId: idSchema,
+    storeId: idSchema,
+    conversationId: idSchema,
+    action: proposalActionSchema,
+    status: {
+      type: "string" as const,
+      enum: [
+        "pending_approval",
+        "approved",
+        "rejected",
+        "expired",
+        "executing",
+        "executed",
+        "failed",
+        "needs_human",
+      ],
+    },
+    createdAt: dateTimeSchema,
+    expiresAt: dateTimeSchema,
+    approval: nullableSchema(proposalApprovalSchema),
+    rejection: nullableSchema(proposalRejectionSchema),
+    execution: proposalExecutionSchema,
+  },
+  [
+    "proposalId",
+    "version",
+    "companyId",
+    "storeId",
+    "conversationId",
+    "action",
+    "status",
+    "createdAt",
+    "expiresAt",
+    "approval",
+    "rejection",
+    "execution",
+  ],
+);
+
+const decisionSchema = objectSchema(
+  {
+    proposalId: idSchema,
+    proposalVersion: positiveIntegerSchema,
     outcome: { type: "string" as const, enum: ["approved", "rejected"] },
-    proposalVersion: { type: "integer" as const, minimum: 1 },
+    actor: actorSchema,
+    comment: nullableSchema(stringSchema),
+    decidedAt: dateTimeSchema,
+  },
+  ["proposalId", "proposalVersion", "outcome", "actor", "comment", "decidedAt"],
+);
+
+const capabilitySchema = objectSchema(
+  {
+    capability: {
+      type: "string" as const,
+      enum: [
+        "store.authorize",
+        "store.token.refresh",
+        "catalog.product.read",
+        "order.read",
+        "logistics.read",
+        "afterSale.read",
+        "afterSale.write",
+        "message.receive",
+        "message.send",
+        "event.subscribe",
+        "event.verify",
+      ],
+    },
+    status: {
+      type: "string" as const,
+      enum: ["available", "unavailable", "waiting_qualification", "degraded"],
+    },
+    reason: stringSchema,
+  },
+  ["capability", "status"],
+);
+
+const metricsSchema = objectSchema(
+  {
+    openConversations: nonNegativeIntegerSchema,
+    waitingForAgent: nonNegativeIntegerSchema,
+    assistantSuggestions: nonNegativeIntegerSchema,
+    proposalsAwaitingApproval: nonNegativeIntegerSchema,
+    refundedAmount: moneySchema,
+    measuredAt: dateTimeSchema,
+  },
+  [
+    "openConversations",
+    "waitingForAgent",
+    "assistantSuggestions",
+    "proposalsAwaitingApproval",
+    "refundedAmount",
+    "measuredAt",
+  ],
+);
+const integrationSchema = objectSchema(
+  {
+    storeId: idSchema,
+    platform: { type: "string" as const, enum: ["douyin"] },
+    displayName: stringSchema,
+    status: { type: "string" as const, enum: ["connected", "degraded", "disconnected"] },
+    capabilities: arraySchema(capabilitySchema),
+  },
+  ["storeId", "platform", "displayName", "status", "capabilities"],
+);
+const activeRuleSchema = objectSchema(
+  {
+    kind: { type: "string" as const, enum: ["after_sale.refund"] },
+    enabled: booleanSchema,
+    requiresApproval: { type: "boolean" as const, enum: [true] },
+    requiredRole: { type: "string" as const, enum: ["supervisor"] },
+  },
+  ["kind", "enabled", "requiresApproval", "requiredRole"],
+);
+const demoModelSchema = objectSchema(
+  {
+    provider: { type: "string" as const, enum: ["deterministic-demo"] },
+    deterministic: { type: "boolean" as const, enum: [true] },
+  },
+  ["provider", "deterministic"],
+);
+const evaluationSummarySchema = objectSchema(
+  {
+    scenario: { type: "string" as const, enum: ["damaged_item"] },
+    status: { type: "string" as const, enum: ["ready"] },
+    score: { type: "number" as const, minimum: 0, maximum: 1 },
+  },
+  ["scenario", "status", "score"],
+);
+const setupSchema = objectSchema(
+  {
+    status: { type: "string" as const, enum: ["incomplete", "complete"] },
+    acceptedAt: nullableSchema(dateTimeSchema),
+  },
+  ["status", "acceptedAt"],
+);
+const workspaceSchema = objectSchema(
+  {
+    companyId: idSchema,
+    storeId: idSchema,
+    metrics: metricsSchema,
+    integrations: arraySchema(integrationSchema),
+    activeRules: arraySchema(activeRuleSchema),
+    messageSendMode: { type: "string" as const, enum: ["assisted", "direct"] },
+    demoModel: demoModelSchema,
+    evaluationSummary: evaluationSummarySchema,
+    setup: setupSchema,
+  },
+  [
+    "companyId",
+    "storeId",
+    "metrics",
+    "integrations",
+    "activeRules",
+    "messageSendMode",
+    "demoModel",
+    "evaluationSummary",
+    "setup",
+  ],
+);
+
+const customerSchema = objectSchema({ customerId: idSchema, displayName: stringSchema }, [
+  "customerId",
+  "displayName",
+]);
+const conversationSummaryProperties = {
+  companyId: idSchema,
+  storeId: idSchema,
+  conversationId: idSchema,
+  customer: customerSchema,
+  status: { type: "string" as const, enum: ["open", "waiting_for_agent", "resolved"] },
+  lastMessagePreview: stringSchema,
+  unreadCount: nonNegativeIntegerSchema,
+  updatedAt: dateTimeSchema,
+};
+const conversationSummarySchema = objectSchema(conversationSummaryProperties, [
+  "companyId",
+  "storeId",
+  "conversationId",
+  "customer",
+  "status",
+  "lastMessagePreview",
+  "unreadCount",
+  "updatedAt",
+]);
+const conversationDetailSchema = objectSchema(
+  {
+    ...conversationSummaryProperties,
+    messages: arraySchema(messageSchema),
+    order: orderSchema,
+    latestSuggestion: nullableSchema(suggestionSchema),
+    citations: arraySchema(citationSchema),
+    proposal: nullableSchema(proposalSchema),
+  },
+  [
+    "companyId",
+    "storeId",
+    "conversationId",
+    "customer",
+    "status",
+    "lastMessagePreview",
+    "unreadCount",
+    "updatedAt",
+    "messages",
+    "order",
+    "latestSuggestion",
+    "citations",
+    "proposal",
+  ],
+);
+
+const auditEventSchema = objectSchema(
+  {
+    auditEventId: idSchema,
+    companyId: idSchema,
+    correlationId: idSchema,
+    causationId: idSchema,
+    eventType: {
+      type: "string" as const,
+      enum: [
+        "conversation.message_ingested",
+        "knowledge.retrieved",
+        "agent.suggestion_generated",
+        "action.proposed",
+        "approval.approved",
+        "approval.rejected",
+        "action.execution_started",
+        "action.execution_succeeded",
+        "action.execution_blocked",
+      ],
+    },
+    occurredAt: dateTimeSchema,
+  },
+  ["auditEventId", "companyId", "correlationId", "causationId", "eventType", "occurredAt"],
+);
+
+const refundRuleSchema = objectSchema(
+  { kind: { type: "string" as const, enum: ["after_sale.refund"] }, enabled: booleanSchema },
+  ["kind", "enabled"],
+);
+const knowledgeReleaseSchema = objectSchema(
+  {
+    releaseId: idSchema,
+    version: positiveIntegerSchema,
+    publishedAt: dateTimeSchema,
+    expiresAt: nullableSchema(dateTimeSchema),
+    immutable: { type: "boolean" as const, enum: [true] },
+  },
+  ["releaseId", "version", "publishedAt", "expiresAt", "immutable"],
+);
+const knowledgePolicySchema = objectSchema(
+  {
+    policyId: idSchema,
+    title: stringSchema,
+    status: { type: "string" as const, enum: ["published"] },
+    scenario: { type: "string" as const, enum: ["damaged_item"] },
+    content: stringSchema,
+    refundRule: refundRuleSchema,
+    citations: arraySchema(citationSchema),
+    release: knowledgeReleaseSchema,
+  },
+  ["policyId", "title", "status", "scenario", "content", "refundRule", "citations", "release"],
+);
+
+const schemaVersionProperty = { type: "integer" as const, enum: [1] };
+function versionedSchema<const Properties extends Readonly<Record<string, Schema>>>(
+  properties: Properties,
+  required: readonly (keyof Properties & string)[],
+) {
+  return objectSchema({ schemaVersion: schemaVersionProperty, ...properties }, [
+    "schemaVersion",
+    ...required,
+  ]);
+}
+
+export const approvalDecisionOpenApiSchema = objectSchema(
+  {
+    outcome: { type: "string" as const, enum: ["approved", "rejected"] },
+    proposalVersion: positiveIntegerSchema,
     comment: { type: "string" as const, minLength: 1 },
   },
-};
+  ["outcome", "proposalVersion"],
+);
 
-export const versionedResponseSchema = {
-  type: "object" as const,
-  required: ["schemaVersion"],
-  properties: { schemaVersion: { type: "integer" as const, enum: [1] } },
-};
-
-const idProperty = { type: "string" as const, minLength: 1 };
-const moneyProperty = {
-  type: "object" as const,
-  required: ["amountMinor", "currency"],
-  properties: {
-    amountMinor: { type: "integer" as const, minimum: 0 },
-    currency: { type: "string" as const, enum: ["CNY"] },
+export const workspaceResponseOpenApiSchema = versionedSchema({ workspace: workspaceSchema }, [
+  "workspace",
+]);
+export const conversationsResponseOpenApiSchema = versionedSchema(
+  { conversations: arraySchema(conversationSummarySchema), generatedAt: dateTimeSchema },
+  ["conversations", "generatedAt"],
+);
+export const conversationDetailResponseOpenApiSchema = versionedSchema(
+  { conversation: conversationDetailSchema },
+  ["conversation"],
+);
+export const suggestionResponseOpenApiSchema = versionedSchema(
+  { suggestion: suggestionSchema, proposal: nullableSchema(proposalSchema) },
+  ["suggestion", "proposal"],
+);
+export const approvalsResponseOpenApiSchema = versionedSchema(
+  { pending: arraySchema(proposalSchema), history: arraySchema(decisionSchema) },
+  ["pending", "history"],
+);
+export const decisionResponseOpenApiSchema = versionedSchema(
+  { decision: decisionSchema, proposal: proposalSchema },
+  ["decision", "proposal"],
+);
+const succeededExecutionResultSchema = objectSchema(
+  {
+    status: { type: "string" as const, enum: ["succeeded"] },
+    proposalId: idSchema,
+    executionId: idSchema,
+    externalReference: stringSchema,
+    completedAt: dateTimeSchema,
   },
-};
-const proposalProperty = {
-  type: "object" as const,
-  required: ["proposalId", "version", "status", "action"],
-  properties: {
-    proposalId: idProperty,
-    version: { type: "integer" as const, minimum: 1 },
-    status: { type: "string" as const },
-    action: {
-      type: "object" as const,
-      required: ["kind", "orderId", "amount", "observedOrder"],
-      properties: {
-        kind: { type: "string" as const, enum: ["after_sale.refund"] },
-        orderId: idProperty,
-        amount: moneyProperty,
-        observedOrder: {
-          type: "object" as const,
-          properties: {
-            version: { type: "integer" as const, minimum: 1 },
-            status: { type: "string" as const, enum: ["delivered"] },
-            refundable: moneyProperty,
-          },
-        },
-      },
-    },
-  },
-};
-
-export const workspaceResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "workspace"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    workspace: {
-      type: "object" as const,
-      required: [
-        "companyId",
-        "storeId",
-        "metrics",
-        "integrations",
-        "activeRules",
-        "messageSendMode",
-        "demoModel",
-        "evaluationSummary",
-        "setup",
+  ["status", "proposalId", "executionId", "externalReference", "completedAt"],
+);
+const needsHumanExecutionResultSchema = objectSchema(
+  {
+    status: { type: "string" as const, enum: ["needs_human"] },
+    proposalId: idSchema,
+    reason: {
+      type: "string" as const,
+      enum: [
+        "ORDER_CHANGED",
+        "ORDER_UNAVAILABLE",
+        "POLICY_CHANGED",
+        "PROPOSAL_EXPIRED",
+        "EXECUTION_UNCONFIRMED",
       ],
-      properties: {
-        companyId: idProperty,
-        storeId: idProperty,
-        metrics: { type: "object" as const },
-        integrations: { type: "array" as const, items: { type: "object" as const } },
-        activeRules: { type: "array" as const, items: { type: "object" as const } },
-        messageSendMode: { type: "string" as const, enum: ["assisted", "direct"] },
-        demoModel: {
-          type: "object" as const,
-          properties: { provider: { type: "string" as const } },
-        },
-        evaluationSummary: { type: "object" as const },
-        setup: { type: "object" as const },
-      },
     },
   },
-};
-
-const conversationSummaryProperty = {
-  type: "object" as const,
-  required: ["companyId", "storeId", "conversationId", "customer", "status", "updatedAt"],
-  properties: {
-    companyId: idProperty,
-    storeId: idProperty,
-    conversationId: idProperty,
-    customer: {
-      type: "object" as const,
-      properties: { customerId: idProperty, displayName: { type: "string" as const } },
-    },
-    status: { type: "string" as const },
-    updatedAt: { type: "string" as const, format: "date-time" },
-  },
-};
-
-export const conversationsResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "conversations", "generatedAt"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    conversations: { type: "array" as const, items: conversationSummaryProperty },
-    generatedAt: { type: "string" as const, format: "date-time" },
-  },
-};
-
-export const conversationDetailResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "conversation"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    conversation: {
-      ...conversationSummaryProperty,
-      properties: {
-        ...conversationSummaryProperty.properties,
-        messages: { type: "array" as const, items: { type: "object" as const } },
-        order: { type: "object" as const },
-        latestSuggestion: { oneOf: [{ type: "object" as const }, { type: "null" as const }] },
-        citations: { type: "array" as const, items: { type: "object" as const } },
-        proposal: { oneOf: [proposalProperty, { type: "null" as const }] },
-      },
-    },
-  },
-};
-
-export const suggestionResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "suggestion", "proposal"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    suggestion: {
-      type: "object" as const,
-      required: [
-        "suggestionId",
-        "conversationId",
-        "provider",
-        "disposition",
-        "suggestedReply",
-        "citations",
-      ],
-      properties: {
-        suggestionId: idProperty,
-        conversationId: idProperty,
-        provider: { type: "string" as const, enum: ["deterministic-demo"] },
-        disposition: { type: "string" as const, enum: ["propose_action", "needs_human"] },
-        suggestedReply: { type: "string" as const },
-        citations: { type: "array" as const, items: { type: "object" as const } },
-      },
-    },
-    proposal: { oneOf: [proposalProperty, { type: "null" as const }] },
-  },
-};
-
-export const approvalsResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "pending", "history"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    pending: { type: "array" as const, items: proposalProperty },
-    history: { type: "array" as const, items: { type: "object" as const } },
-  },
-};
-
-export const decisionResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "decision", "proposal"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    decision: {
-      type: "object" as const,
-      properties: { outcome: { type: "string" as const, enum: ["approved", "rejected"] } },
-    },
-    proposal: proposalProperty,
-  },
-};
-
-export const executionResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "result"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    result: {
-      type: "object" as const,
-      required: ["status", "proposalId"],
-      properties: {
-        status: { type: "string" as const, enum: ["succeeded", "needs_human"] },
-        proposalId: idProperty,
-        executionId: idProperty,
-        externalReference: { type: "string" as const },
-        completedAt: { type: "string" as const, format: "date-time" },
-        reason: { type: "string" as const },
-      },
-    },
-  },
-};
-
-export const knowledgeResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "policies"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    policies: {
-      type: "array" as const,
-      items: {
-        type: "object" as const,
-        required: ["policyId", "status", "release"],
-        properties: {
-          policyId: idProperty,
-          status: { type: "string" as const, enum: ["published"] },
-          release: {
-            type: "object" as const,
-            properties: {
-              releaseId: idProperty,
-              version: { type: "integer" as const },
-              immutable: { type: "boolean" as const },
-            },
-          },
-        },
-      },
-    },
-  },
-};
-
-export const auditResponseOpenApiSchema = {
-  ...versionedResponseSchema,
-  required: ["schemaVersion", "events"],
-  properties: {
-    ...versionedResponseSchema.properties,
-    events: {
-      type: "array" as const,
-      items: {
-        type: "object" as const,
-        required: ["auditEventId", "eventType", "occurredAt"],
-        properties: {
-          auditEventId: idProperty,
-          eventType: { type: "string" as const },
-          occurredAt: { type: "string" as const, format: "date-time" },
-        },
-      },
-    },
-  },
-};
+  ["status", "proposalId", "reason"],
+);
+export const executionResponseOpenApiSchema = versionedSchema(
+  { result: { oneOf: [succeededExecutionResultSchema, needsHumanExecutionResultSchema] } },
+  ["result"],
+);
+export const knowledgeResponseOpenApiSchema = versionedSchema(
+  { policies: arraySchema(knowledgePolicySchema) },
+  ["policies"],
+);
+export const auditResponseOpenApiSchema = versionedSchema(
+  { events: arraySchema(auditEventSchema) },
+  ["events"],
+);

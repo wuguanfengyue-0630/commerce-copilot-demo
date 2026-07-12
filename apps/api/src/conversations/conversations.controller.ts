@@ -7,6 +7,7 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import {
+  asOpenApiSchema,
   ConversationParamsDto,
   conversationDetailResponseOpenApiSchema,
   conversationsResponseOpenApiSchema,
@@ -22,7 +23,7 @@ export class ConversationsController {
   @Inject(DEMO_WORKFLOW) private readonly workflow!: DemoWorkflow;
 
   @Get()
-  @ApiOkResponse({ schema: conversationsResponseOpenApiSchema })
+  @ApiOkResponse({ schema: asOpenApiSchema(conversationsResponseOpenApiSchema) })
   list() {
     return this.workflow.conversations();
   }
@@ -30,7 +31,7 @@ export class ConversationsController {
   @Get(":conversationId")
   @Bind(Param(new ZodValidationPipe(ConversationParamsDto.schema)))
   @ApiParam({ name: "conversationId", type: String })
-  @ApiOkResponse({ schema: conversationDetailResponseOpenApiSchema })
+  @ApiOkResponse({ schema: asOpenApiSchema(conversationDetailResponseOpenApiSchema) })
   detail(params: ConversationParamsDto) {
     return this.workflow.conversation(params.conversationId);
   }
@@ -43,7 +44,7 @@ export class ConversationsController {
   @HttpCode(201)
   @ApiOperation({ summary: "Generate one grounded demo suggestion" })
   @ApiParam({ name: "conversationId", type: String })
-  @ApiCreatedResponse({ schema: suggestionResponseOpenApiSchema })
+  @ApiCreatedResponse({ schema: asOpenApiSchema(suggestionResponseOpenApiSchema) })
   generate(params: ConversationParamsDto, _body: undefined | Record<string, never>) {
     return this.workflow.generateSuggestion(params.conversationId);
   }
