@@ -8,7 +8,8 @@ import {
 } from "@commerce-copilot/domain";
 import { z } from "zod";
 
-export const schemaVersionSchema = z.literal(1);
+export const SCHEMA_VERSION = 1 as const;
+export const schemaVersionSchema = z.literal(SCHEMA_VERSION);
 export const isoDateTimeSchema = z.iso.datetime({ offset: true });
 export const nonBlankStringSchema = z.string().trim().min(1);
 export const identifierSchema = nonBlankStringSchema;

@@ -26,6 +26,7 @@ import {
   moneySchema,
   orderStatusSchema,
   platformCapabilitySchema,
+  SCHEMA_VERSION,
 } from "./api.ts";
 import { settingsResponseSchema } from "./settings.ts";
 import {
@@ -225,6 +226,10 @@ const settingsResponse = {
 } as const;
 
 describe("shared API schemas", () => {
+  it("exports the canonical schema version used by envelopes", () => {
+    expect(SCHEMA_VERSION).toBe(1);
+  });
+
   it("derives every shared enum from the domain canonical tuples", () => {
     expect(currencySchema.options).toEqual(CURRENCIES);
     expect(platformCapabilitySchema.options).toEqual(PLATFORM_CAPABILITIES);

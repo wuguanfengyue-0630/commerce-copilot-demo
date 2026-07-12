@@ -1,7 +1,8 @@
 import { createDemoRuntime, type DemoRuntime } from "@commerce-copilot/application";
-import { afterEach, describe, expect, it } from "vitest";
+import { errorEnvelopeSchema, SCHEMA_VERSION } from "@commerce-copilot/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/create-app.ts";
-import { resolveServerConfig } from "../src/main.ts";
+import { listenWithCleanup, resolveServerConfig } from "../src/main.ts";
 
 const openApps: Awaited<ReturnType<typeof createApp>>[] = [];
 
@@ -10,7 +11,11 @@ afterEach(async () => {
 });
 
 async function openDemoApp(runtime?: DemoRuntime) {
-  const app = await createApp(runtime === undefined ? { mode: "demo" } : { mode: "demo", runtime });
+  const app = await createApp(
+    runtime === undefined
+      ? { mode: "demo", logger: false }
+      : { mode: "demo", logger: false, runtime },
+  );
   openApps.push(app);
   return app;
 }
@@ -106,7 +111,10 @@ describe("API health", () => {
     const body = response.json();
 
     expect(response.statusCode).toBe(404);
-    expect(body).toEqual({ error: { code: "NOT_FOUND", message: "未找到请求的接口。" } });
+    expect(errorEnvelopeSchema.parse(body)).toEqual({
+      schemaVersion: SCHEMA_VERSION,
+      error: { code: "NOT_FOUND", message: "未找到请求的接口。" },
+    });
     expect(JSON.stringify(body)).not.toContain("stack");
   });
 
@@ -140,6 +148,18 @@ describe("API health", () => {
       "Unsupported runtime mode: production",
     );
   });
+
+  it("uses an injected Nest logger when requested", async () => {
+    const logger = {
+      log: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+    };
+    const app = await createApp({ mode: "demo", logger });
+    openApps.push(app);
+
+    expect(logger.log).toHaveBeenCalled();
+  });
 });
 
 describe("server configuration", () => {
@@ -160,5 +180,26 @@ describe("server configuration", () => {
     expect(() => resolveServerConfig({ APP_MODE: "production" })).toThrow(
       "Unsupported runtime mode: production",
     );
+  });
+
+  it("closes the app when binding the listener fails", async () => {
+    const bindError = new Error("EADDRINUSE");
+    let shutdownHooksEnabled = false;
+    let closed = false;
+    const app = {
+      enableShutdownHooks() {
+        shutdownHooksEnabled = true;
+      },
+      async listen() {
+        throw bindError;
+      },
+      async close() {
+        closed = true;
+      },
+    };
+
+    await expect(listenWithCleanup(app, 4000, "127.0.0.1")).rejects.toBe(bindError);
+    expect(shutdownHooksEnabled).toBe(true);
+    expect(closed).toBe(true);
   });
 });

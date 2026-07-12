@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 import { createApp } from "./create-app.ts";
 
 type Environment = Readonly<Record<string, string | undefined>>;
+type ListenableApp = Readonly<{
+  enableShutdownHooks(): unknown;
+  listen(port: number, host: string): Promise<unknown>;
+  close(): Promise<void>;
+}>;
 
 export function resolveServerConfig(environment: Environment) {
   const mode = environment.APP_MODE ?? "demo";
@@ -33,7 +38,21 @@ function parsePort(value: string): number {
 async function bootstrap(): Promise<void> {
   const config = resolveServerConfig(process.env);
   const app = await createApp({ mode: config.mode });
-  await app.listen(config.port, config.host);
+  await listenWithCleanup(app, config.port, config.host);
+}
+
+export async function listenWithCleanup(
+  app: ListenableApp,
+  port: number,
+  host: string,
+): Promise<void> {
+  try {
+    app.enableShutdownHooks();
+    await app.listen(port, host);
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
 }
 
 const isMainModule =
