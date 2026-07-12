@@ -66,6 +66,17 @@ const positiveIntegerSchema = { type: "integer" as const, minimum: 1 };
 const nonNegativeIntegerSchema = { type: "integer" as const, minimum: 0 };
 const booleanSchema = { type: "boolean" as const };
 const currencySchema = { type: "string" as const, enum: ["CNY"] };
+const needsHumanReasonValues = [
+  "ORDER_CHANGED",
+  "ORDER_UNAVAILABLE",
+  "POLICY_CHANGED",
+  "PROPOSAL_EXPIRED",
+  "EXECUTION_UNCONFIRMED",
+];
+const needsHumanReasonSchema = {
+  type: "string" as const,
+  enum: needsHumanReasonValues,
+};
 
 const moneySchema = objectSchema(
   { amountMinor: nonNegativeIntegerSchema, currency: currencySchema },
@@ -226,12 +237,13 @@ const needsHumanProposalExecutionSchema = objectSchema(
   {
     status: { type: "string" as const, enum: ["needs_human"] },
     startedAt: nullableSchema(dateTimeSchema),
-    reason: stringSchema,
+    reason: needsHumanReasonSchema,
     markedAt: dateTimeSchema,
   },
   ["status", "startedAt", "reason", "markedAt"],
 );
 const proposalExecutionSchema = {
+  type: "object" as const,
   oneOf: [
     startedExecutionSchema,
     succeededProposalExecutionSchema,
@@ -566,16 +578,7 @@ const needsHumanExecutionResultSchema = objectSchema(
   {
     status: { type: "string" as const, enum: ["needs_human"] },
     proposalId: idSchema,
-    reason: {
-      type: "string" as const,
-      enum: [
-        "ORDER_CHANGED",
-        "ORDER_UNAVAILABLE",
-        "POLICY_CHANGED",
-        "PROPOSAL_EXPIRED",
-        "EXECUTION_UNCONFIRMED",
-      ],
-    },
+    reason: needsHumanReasonSchema,
   },
   ["status", "proposalId", "reason"],
 );

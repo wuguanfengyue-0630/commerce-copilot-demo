@@ -439,6 +439,9 @@ describe("typed demo workflow API", () => {
       "reasonCode",
       "observedOrder",
     ]);
+    const proposalExecution = propertySchema(proposal, "execution");
+    expect(proposalExecution).toMatchObject({ type: "object", nullable: true });
+    expect(proposalExecution.oneOf).toHaveLength(3);
 
     const approvalsSchema = responseSchema(document, "/api/v1/approvals", "get", "200");
     expectRequired(arrayItem(approvalsSchema, "history"), [
@@ -455,7 +458,21 @@ describe("typed demo workflow API", () => {
       "post",
       "201",
     );
-    expect(propertySchema(executionSchema, "result").oneOf).toHaveLength(2);
+    const executionResult = propertySchema(executionSchema, "result");
+    expect(executionResult.oneOf).toHaveLength(2);
+    const needsHumanReasons = [
+      "ORDER_CHANGED",
+      "ORDER_UNAVAILABLE",
+      "POLICY_CHANGED",
+      "PROPOSAL_EXPIRED",
+      "EXECUTION_UNCONFIRMED",
+    ];
+    expect(propertySchema(oneOfStatus(proposalExecution, "needs_human"), "reason").enum).toEqual(
+      needsHumanReasons,
+    );
+    expect(propertySchema(oneOfStatus(executionResult, "needs_human"), "reason").enum).toEqual(
+      needsHumanReasons,
+    );
 
     const auditSchema = responseSchema(document, "/api/v1/audit-events", "get", "200");
     expectRequired(arrayItem(auditSchema, "events"), [
@@ -569,6 +586,7 @@ async function approveAndExecute(
 type OpenApiSchema = {
   type?: string;
   nullable?: boolean;
+  enum?: unknown[];
   required?: string[];
   properties: Record<string, OpenApiSchema>;
   items?: OpenApiSchema;
@@ -629,4 +647,12 @@ function nullableVariant(schema: OpenApiSchema): OpenApiSchema {
   expect(schema.nullable).toBe(true);
   expect(schema.type).toBe("object");
   return schema;
+}
+
+function oneOfStatus(schema: OpenApiSchema, status: string): OpenApiSchema {
+  const branch = schema.oneOf?.find((candidate) =>
+    propertySchema(candidate, "status").enum?.includes(status),
+  );
+  if (branch === undefined) throw new Error(`Missing OpenAPI oneOf status ${status}`);
+  return branch;
 }
