@@ -147,6 +147,19 @@ const conversationDetailResponse = {
         occurredAt: observedAt,
       },
     ],
+    order: {
+      companyId: "company-1",
+      storeId: "store-1",
+      orderId: "order-1",
+      version: 3,
+      status: "delivered",
+      total: { amountMinor: 25_600, currency: "CNY" },
+      refundable: money,
+      updatedAt: observedAt,
+    },
+    latestSuggestion: null,
+    citations: [],
+    proposal: null,
   },
 } as const;
 
@@ -181,9 +194,10 @@ const actionProposalResponse = {
 
 const approvalDecision = {
   proposalId: "proposal-1",
-  decision: "approved",
-  decidedBy: "user-1",
-  reason: "Verified against the demo refund rule.",
+  proposalVersion: 1,
+  outcome: "approved",
+  actor: { userId: "user-1", role: "supervisor" },
+  comment: "Verified against the demo refund rule.",
   decidedAt: observedAt,
 } as const;
 

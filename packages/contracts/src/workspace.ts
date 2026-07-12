@@ -102,14 +102,12 @@ export const conversationMessageSchema = z.strictObject({
   occurredAt: isoDateTimeSchema,
 });
 
-export const conversationDetailSchema = conversationSummarySchema.extend({
-  messages: z.array(conversationMessageSchema),
-});
-
-export const conversationDetailResponseSchema = z.strictObject({
-  schemaVersion: schemaVersionSchema,
-  conversation: conversationDetailSchema,
-});
+export {
+  type ConversationDetail,
+  type ConversationDetailResponse,
+  conversationDetailResponseSchema,
+  conversationDetailSchema,
+} from "./demo-workflow.ts";
 
 export type SessionUser = z.infer<typeof sessionUserSchema>;
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;
@@ -121,5 +119,3 @@ export type CustomerSummary = z.infer<typeof customerSummarySchema>;
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 export type ConversationSummaryResponse = z.infer<typeof conversationSummaryResponseSchema>;
 export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
-export type ConversationDetail = z.infer<typeof conversationDetailSchema>;
-export type ConversationDetailResponse = z.infer<typeof conversationDetailResponseSchema>;

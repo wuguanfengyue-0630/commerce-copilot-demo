@@ -1,10 +1,13 @@
+import {
+  type AuditEventsResponse,
+  type AuditQuery,
+  auditEventsResponseSchema,
+  auditQuerySchema,
+} from "@commerce-copilot/contracts";
 import { Bind, Controller, Get, Inject, Query } from "@nestjs/common";
 import { ApiOkResponse, ApiQuery, ApiTags } from "@nestjs/swagger";
-import {
-  AuditQueryDto,
-  asOpenApiSchema,
-  auditResponseOpenApiSchema,
-} from "../common/workflow-dtos.ts";
+import { ApiErrorResponses } from "../common/api-error-responses.ts";
+import { zodToOpenApiSchema } from "../common/zod-openapi.ts";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.ts";
 import { DEMO_WORKFLOW, type DemoWorkflow } from "../demo/demo-workflow.service.ts";
 
@@ -14,10 +17,11 @@ export class AuditController {
   @Inject(DEMO_WORKFLOW) private readonly workflow!: DemoWorkflow;
 
   @Get()
-  @Bind(Query(new ZodValidationPipe(AuditQueryDto.schema)))
+  @Bind(Query(new ZodValidationPipe(auditQuerySchema)))
   @ApiQuery({ name: "conversationId", required: true, type: String })
-  @ApiOkResponse({ schema: asOpenApiSchema(auditResponseOpenApiSchema) })
-  list(query: AuditQueryDto) {
+  @ApiOkResponse({ schema: zodToOpenApiSchema(auditEventsResponseSchema) })
+  @ApiErrorResponses(422, 500)
+  list(query: AuditQuery): Promise<AuditEventsResponse> {
     return this.workflow.auditEvents(query.conversationId);
   }
 }

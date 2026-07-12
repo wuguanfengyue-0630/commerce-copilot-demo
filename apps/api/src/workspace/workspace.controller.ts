@@ -1,6 +1,8 @@
+import { type WorkspaceResponse, workspaceResponseSchema } from "@commerce-copilot/contracts";
 import { Controller, Get, Inject } from "@nestjs/common";
 import { ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { asOpenApiSchema, workspaceResponseOpenApiSchema } from "../common/workflow-dtos.ts";
+import { ApiErrorResponses } from "../common/api-error-responses.ts";
+import { zodToOpenApiSchema } from "../common/zod-openapi.ts";
 import { DEMO_STATE, type DemoStatePort } from "../demo/demo.controller.ts";
 import { DEMO_WORKFLOW, type DemoWorkflow } from "../demo/demo-workflow.service.ts";
 
@@ -12,8 +14,9 @@ export class WorkspaceController {
 
   @Get()
   @ApiOperation({ summary: "Read the demo operations workspace" })
-  @ApiOkResponse({ schema: asOpenApiSchema(workspaceResponseOpenApiSchema) })
-  get() {
+  @ApiOkResponse({ schema: zodToOpenApiSchema(workspaceResponseSchema) })
+  @ApiErrorResponses(500)
+  get(): Promise<WorkspaceResponse> {
     return this.workflow.workspace(this.state.setup());
   }
 }

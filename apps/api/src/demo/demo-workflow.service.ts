@@ -13,7 +13,19 @@ import {
   createMockCommerceConnector,
   type MockCommerceConnector,
 } from "@commerce-copilot/connectors";
-import { SCHEMA_VERSION } from "@commerce-copilot/contracts";
+import {
+  type ApprovalDecisionRequest,
+  approvalDecisionResponseSchema,
+  approvalsResponseSchema,
+  auditEventsResponseSchema,
+  conversationDetailResponseSchema,
+  conversationListResponseSchema,
+  executionResponseSchema,
+  knowledgeResponseSchema,
+  SCHEMA_VERSION,
+  suggestionResponseSchema,
+  workspaceResponseSchema,
+} from "@commerce-copilot/contracts";
 import {
   type ActionProposal,
   createCompanyId,
@@ -38,17 +50,12 @@ const generatedAt = toIsoTimestamp("2026-07-11T01:20:00.000Z");
 const refundRules = Object.freeze([{ kind: "after_sale.refund" as const, enabled: true }]);
 const supervisor = Object.freeze({ id: "user-demo-supervisor", role: "supervisor" as const });
 
-export type ApprovalDecisionInput = Readonly<{
-  outcome: "approved" | "rejected";
-  proposalVersion: number;
-  comment?: string;
-}>;
-
 export type DemoSetupState =
   | Readonly<{ status: "incomplete"; acceptedAt: null }>
   | Readonly<{ status: "complete"; acceptedAt: string }>;
 
 export class DemoWorkflow {
+  private readonly coordinator = new OperationCoordinator();
   private readonly connector: ResettableCommerceConnector;
   private readonly decideApprovalUseCase: ReturnType<typeof createDecideApprovalUseCase>;
   private readonly executeActionUseCase: ReturnType<typeof createExecuteActionUseCase>;
@@ -78,9 +85,11 @@ export class DemoWorkflow {
     });
   }
 
-  reset(): void {
-    this.runtime.reset();
-    this.connector.reset();
+  reset(): Promise<void> {
+    return this.coordinator.runReset(() => {
+      this.runtime.reset();
+      this.connector.reset();
+    });
   }
 
   async workspace(setup: DemoSetupState) {
@@ -89,7 +98,7 @@ export class DemoWorkflow {
       context("workspace", "workspace"),
       seededConversationId,
     );
-    return {
+    return workspaceResponseSchema.parse({
       schemaVersion: SCHEMA_VERSION,
       workspace: {
         companyId,
@@ -129,13 +138,13 @@ export class DemoWorkflow {
         evaluationSummary: { scenario: "damaged_item", status: "ready", score: 1 },
         setup,
       },
-    };
+    });
   }
 
   async conversations() {
     const conversation = await this.loadConversation(seededConversationId);
     const latest = conversation.messages.at(-1);
-    return {
+    return conversationListResponseSchema.parse({
       schemaVersion: SCHEMA_VERSION,
       conversations: [
         {
@@ -150,7 +159,7 @@ export class DemoWorkflow {
         },
       ],
       generatedAt,
-    };
+    });
   }
 
   async conversation(rawConversationId: string) {
@@ -170,7 +179,7 @@ export class DemoWorkflow {
     );
     const latestSuggestion = suggestions.at(-1) ?? null;
     const proposal = proposals.at(-1);
-    return {
+    return conversationDetailResponseSchema.parse({
       schemaVersion: SCHEMA_VERSION,
       conversation: {
         companyId: conversation.companyId,
@@ -189,26 +198,28 @@ export class DemoWorkflow {
         citations: latestSuggestion?.citations ?? [],
         proposal: proposal === undefined ? null : presentProposal(proposal),
       },
-    };
+    });
   }
 
   async generateSuggestion(rawConversationId: string) {
-    const conversationId = createConversationId(rawConversationId);
-    const conversation = await this.loadConversation(conversationId);
-    const result = await this.generateSuggestionUseCase.execute({
-      companyId,
-      storeId,
-      conversationId,
-      orderId,
-      correlationId: workflowCorrelation(conversationId),
-      causationId: conversation.messages[0]?.messageId ?? conversationId,
-      actorRole: "supervisor",
+    return this.coordinator.runMutation(async () => {
+      const conversationId = createConversationId(rawConversationId);
+      const conversation = await this.loadConversation(conversationId);
+      const result = await this.generateSuggestionUseCase.execute({
+        companyId,
+        storeId,
+        conversationId,
+        orderId,
+        correlationId: workflowCorrelation(conversationId),
+        causationId: conversation.messages[0]?.messageId ?? conversationId,
+        actorRole: "supervisor",
+      });
+      return suggestionResponseSchema.parse({
+        schemaVersion: SCHEMA_VERSION,
+        suggestion: presentSuggestion(result.suggestion),
+        proposal: result.proposal === undefined ? null : presentProposal(result.proposal),
+      });
     });
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      suggestion: presentSuggestion(result.suggestion),
-      proposal: result.proposal === undefined ? null : presentProposal(result.proposal),
-    };
   }
 
   async approvals() {
@@ -229,53 +240,57 @@ export class DemoWorkflow {
       );
       history.push(...decisions.map(presentDecision));
     }
-    return { schemaVersion: SCHEMA_VERSION, pending, history };
+    return approvalsResponseSchema.parse({ schemaVersion: SCHEMA_VERSION, pending, history });
   }
 
-  async decide(rawProposalId: string, input: ApprovalDecisionInput) {
-    const proposalId = createProposalId(rawProposalId);
-    const result = await this.decideApprovalUseCase.execute({
-      companyId,
-      proposalId,
-      proposalVersion: input.proposalVersion,
-      outcome: input.outcome,
-      ...(input.comment === undefined ? {} : { comment: input.comment }),
-      actor: supervisor,
-      correlationId: workflowCorrelation(seededConversationId),
-      causationId: proposalId,
+  async decide(rawProposalId: string, input: ApprovalDecisionRequest) {
+    return this.coordinator.runMutation(async () => {
+      const proposalId = createProposalId(rawProposalId);
+      const result = await this.decideApprovalUseCase.execute({
+        companyId,
+        proposalId,
+        proposalVersion: input.proposalVersion,
+        outcome: input.outcome,
+        ...(input.comment === undefined ? {} : { comment: input.comment }),
+        actor: supervisor,
+        correlationId: workflowCorrelation(seededConversationId),
+        causationId: proposalId,
+      });
+      return approvalDecisionResponseSchema.parse({
+        schemaVersion: SCHEMA_VERSION,
+        decision: presentDecision(result.decision),
+        proposal: presentProposal(result.proposal),
+      });
     });
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      decision: presentDecision(result.decision),
-      proposal: presentProposal(result.proposal),
-    };
   }
 
   async execute(rawProposalId: string) {
-    const proposalId = createProposalId(rawProposalId);
-    const result = await this.executeActionUseCase.execute({
-      companyId,
-      proposalId,
-      actor: supervisor,
-      correlationId: workflowCorrelation(seededConversationId),
-      causationId: proposalId,
-    });
-    if (result.status === "needs_human") {
-      return {
-        schemaVersion: SCHEMA_VERSION,
-        result: { status: result.status, proposalId, reason: result.reason },
-      };
-    }
-    return {
-      schemaVersion: SCHEMA_VERSION,
-      result: {
-        status: "succeeded",
+    return this.coordinator.runMutation(async () => {
+      const proposalId = createProposalId(rawProposalId);
+      const result = await this.executeActionUseCase.execute({
+        companyId,
         proposalId,
-        executionId: result.executionResult.executionId,
-        externalReference: result.executionResult.externalReference,
-        completedAt: result.executionResult.completedAt,
-      },
-    };
+        actor: supervisor,
+        correlationId: workflowCorrelation(seededConversationId),
+        causationId: proposalId,
+      });
+      if (result.status === "needs_human") {
+        return executionResponseSchema.parse({
+          schemaVersion: SCHEMA_VERSION,
+          result: { status: result.status, proposalId, reason: result.reason },
+        });
+      }
+      return executionResponseSchema.parse({
+        schemaVersion: SCHEMA_VERSION,
+        result: {
+          status: "succeeded" as const,
+          proposalId,
+          executionId: result.executionResult.executionId,
+          externalReference: result.executionResult.externalReference,
+          completedAt: result.executionResult.completedAt,
+        },
+      });
+    });
   }
 
   async knowledge() {
@@ -286,7 +301,7 @@ export class DemoWorkflow {
       query: "damaged_item",
       evaluatedAt: generatedAt,
     });
-    return {
+    return knowledgeResponseSchema.parse({
       schemaVersion: SCHEMA_VERSION,
       policies: policies.map((policy) => ({
         policyId: "policy-damaged-item-refund-v1",
@@ -304,7 +319,7 @@ export class DemoWorkflow {
           immutable: true,
         },
       })),
-    };
+    });
   }
 
   async auditEvents(rawConversationId: string) {
@@ -313,7 +328,9 @@ export class DemoWorkflow {
       context("audit-read", "audit-read"),
       conversationId,
     );
-    if (conversation === null) return { schemaVersion: SCHEMA_VERSION, events: [] };
+    if (conversation === null) {
+      return auditEventsResponseSchema.parse({ schemaVersion: SCHEMA_VERSION, events: [] });
+    }
     const acceptedCorrelations = new Set([workflowCorrelation(conversationId)]);
     const acceptedCausations = new Set(
       conversation.messages.map((message) => String(message.messageId)),
@@ -326,14 +343,14 @@ export class DemoWorkflow {
     const events = await this.runtime.repositories.auditEvents.list(
       context("audit-read", "audit-read"),
     );
-    return {
+    return auditEventsResponseSchema.parse({
       schemaVersion: SCHEMA_VERSION,
       events: events.filter(
         (event) =>
           acceptedCorrelations.has(event.correlationId) ||
           acceptedCausations.has(event.causationId),
       ),
-    };
+    });
   }
 
   private async loadConversation(conversationId: ReturnType<typeof createConversationId>) {
@@ -343,6 +360,27 @@ export class DemoWorkflow {
     );
     if (conversation === null) throw new NotFoundException("Conversation not found");
     return conversation;
+  }
+}
+
+export class OperationCoordinator {
+  private tail: Promise<void> = Promise.resolve();
+
+  runMutation<Result>(operation: () => Promise<Result>): Promise<Result> {
+    return this.enqueue(operation);
+  }
+
+  runReset(operation: () => void | Promise<void>): Promise<void> {
+    return this.enqueue(operation);
+  }
+
+  private enqueue<Result>(operation: () => Result | Promise<Result>): Promise<Result> {
+    const result = this.tail.then(operation);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 

@@ -1,4 +1,33 @@
 export * from "./actions.ts";
 export * from "./api.ts";
+export {
+  type ApprovalDecisionRequest,
+  type ApprovalsResponse,
+  type AuditEventsResponse,
+  type AuditQuery,
+  approvalDecisionRequestSchema,
+  approvalsResponseSchema,
+  auditEventsResponseSchema,
+  auditQuerySchema,
+  type ConversationListResponse,
+  type ConversationParams,
+  conversationListResponseSchema,
+  conversationParamsSchema,
+  DEMO_NEEDS_HUMAN_REASONS,
+  demoActionProposalSchema,
+  demoDecisionSchema,
+  demoNeedsHumanReasonSchema,
+  type ExecutionResponse,
+  emptyCommandBodySchema,
+  executionResponseSchema,
+  type KnowledgeResponse,
+  knowledgeResponseSchema,
+  type ProposalParams,
+  proposalParamsSchema,
+  type SuggestionResponse,
+  suggestionResponseSchema,
+  type WorkspaceResponse,
+  workspaceResponseSchema,
+} from "./demo-workflow.ts";
 export * from "./settings.ts";
 export * from "./workspace.ts";

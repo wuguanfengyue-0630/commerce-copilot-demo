@@ -53,18 +53,12 @@ export const actionStatusResponseSchema = z.strictObject({
   updatedAt: isoDateTimeSchema,
 });
 
-export const approvalDecisionSchema = z.strictObject({
-  proposalId: identifierSchema,
-  decision: z.enum(["approved", "rejected"]),
-  decidedBy: identifierSchema,
-  reason: nonBlankStringSchema.optional(),
-  decidedAt: isoDateTimeSchema,
-});
-
-export const approvalDecisionResponseSchema = z.strictObject({
-  schemaVersion: schemaVersionSchema,
-  decision: approvalDecisionSchema,
-});
+export {
+  type ApprovalDecisionResponse,
+  approvalDecisionResponseSchema,
+  type DemoDecision as ApprovalDecision,
+  demoDecisionSchema as approvalDecisionSchema,
+} from "./demo-workflow.ts";
 
 export const actionExecutionResultSchema = z.discriminatedUnion("status", [
   z.strictObject({
@@ -100,7 +94,5 @@ export type ActionProposalStatus = z.infer<typeof actionProposalStatusSchema>;
 export type ActionProposal = z.infer<typeof actionProposalSchema>;
 export type ActionProposalResponse = z.infer<typeof actionProposalResponseSchema>;
 export type ActionStatusResponse = z.infer<typeof actionStatusResponseSchema>;
-export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;
-export type ApprovalDecisionResponse = z.infer<typeof approvalDecisionResponseSchema>;
 export type ActionExecutionResult = z.infer<typeof actionExecutionResultSchema>;
 export type ActionExecutionResultResponse = z.infer<typeof actionExecutionResultResponseSchema>;

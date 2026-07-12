@@ -29,14 +29,14 @@ beforeEach(() => {
 });
 
 describe("DemoWorkflow composition", () => {
-  it("constructs each use case once per app and retains it across reset", () => {
+  it("constructs each use case once per app and retains it across reset", async () => {
     const workflow = new DemoWorkflow(createDemoRuntime());
 
     expect(factories.suggestion).toHaveBeenCalledTimes(1);
     expect(factories.approval).toHaveBeenCalledTimes(1);
     expect(factories.execution).toHaveBeenCalledTimes(1);
 
-    workflow.reset();
+    await workflow.reset();
     expect(factories.suggestion).toHaveBeenCalledTimes(1);
     expect(factories.approval).toHaveBeenCalledTimes(1);
     expect(factories.execution).toHaveBeenCalledTimes(1);

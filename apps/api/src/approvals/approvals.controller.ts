@@ -1,13 +1,17 @@
+import {
+  type ApprovalDecisionRequest,
+  type ApprovalDecisionResponse,
+  type ApprovalsResponse,
+  approvalDecisionRequestSchema,
+  approvalDecisionResponseSchema,
+  approvalsResponseSchema,
+  type ProposalParams,
+  proposalParamsSchema,
+} from "@commerce-copilot/contracts";
 import { Bind, Body, Controller, Get, HttpCode, Inject, Param, Post } from "@nestjs/common";
 import { ApiBody, ApiCreatedResponse, ApiOkResponse, ApiParam, ApiTags } from "@nestjs/swagger";
-import {
-  ApprovalDecisionDto,
-  approvalDecisionOpenApiSchema,
-  approvalsResponseOpenApiSchema,
-  asOpenApiSchema,
-  decisionResponseOpenApiSchema,
-  ProposalParamsDto,
-} from "../common/workflow-dtos.ts";
+import { ApiErrorResponses } from "../common/api-error-responses.ts";
+import { zodToOpenApiSchema } from "../common/zod-openapi.ts";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.ts";
 import { DEMO_WORKFLOW, type DemoWorkflow } from "../demo/demo-workflow.service.ts";
 
@@ -17,21 +21,23 @@ export class ApprovalsController {
   @Inject(DEMO_WORKFLOW) private readonly workflow!: DemoWorkflow;
 
   @Get()
-  @ApiOkResponse({ schema: asOpenApiSchema(approvalsResponseOpenApiSchema) })
-  list() {
+  @ApiOkResponse({ schema: zodToOpenApiSchema(approvalsResponseSchema) })
+  @ApiErrorResponses(500)
+  list(): Promise<ApprovalsResponse> {
     return this.workflow.approvals();
   }
 
   @Post(":proposalId/decisions")
   @Bind(
-    Param(new ZodValidationPipe(ProposalParamsDto.schema)),
-    Body(new ZodValidationPipe(ApprovalDecisionDto.schema)),
+    Param(new ZodValidationPipe(proposalParamsSchema)),
+    Body(new ZodValidationPipe(approvalDecisionRequestSchema)),
   )
   @HttpCode(201)
   @ApiParam({ name: "proposalId", type: String })
-  @ApiBody({ schema: asOpenApiSchema(approvalDecisionOpenApiSchema) })
-  @ApiCreatedResponse({ schema: asOpenApiSchema(decisionResponseOpenApiSchema) })
-  decide(params: ProposalParamsDto, body: ApprovalDecisionDto) {
+  @ApiBody({ schema: zodToOpenApiSchema(approvalDecisionRequestSchema) })
+  @ApiCreatedResponse({ schema: zodToOpenApiSchema(approvalDecisionResponseSchema) })
+  @ApiErrorResponses(404, 409, 422, 500)
+  decide(params: ProposalParams, body: ApprovalDecisionRequest): Promise<ApprovalDecisionResponse> {
     return this.workflow.decide(params.proposalId, body);
   }
 }

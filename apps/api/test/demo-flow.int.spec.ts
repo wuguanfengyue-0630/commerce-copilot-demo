@@ -1,4 +1,17 @@
 import { createDemoRuntime } from "@commerce-copilot/application";
+import {
+  approvalDecisionRequestSchema,
+  approvalDecisionResponseSchema,
+  approvalsResponseSchema,
+  auditEventsResponseSchema,
+  conversationDetailResponseSchema,
+  conversationListResponseSchema,
+  errorEnvelopeSchema,
+  executionResponseSchema,
+  knowledgeResponseSchema,
+  suggestionResponseSchema,
+  workspaceResponseSchema,
+} from "@commerce-copilot/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/create-app.ts";
 
@@ -44,6 +57,7 @@ describe("typed demo workflow API", () => {
 
     const workspace = await server.inject({ method: "GET", url: "/api/v1/workspace" });
     expect(workspace.statusCode).toBe(200);
+    workspaceResponseSchema.parse(workspace.json());
     expect(workspace.json()).toMatchObject({
       schemaVersion: 1,
       workspace: {
@@ -60,6 +74,7 @@ describe("typed demo workflow API", () => {
       url: "/api/v1/conversations",
     });
     expect(conversations.statusCode).toBe(200);
+    conversationListResponseSchema.parse(conversations.json());
     expect(conversations.json().conversations).toHaveLength(1);
     expect(conversations.json().conversations[0]).toMatchObject({ conversationId });
 
@@ -68,6 +83,7 @@ describe("typed demo workflow API", () => {
       url: `/api/v1/conversations/${conversationId}`,
     });
     expect(before.statusCode).toBe(200);
+    conversationDetailResponseSchema.parse(before.json());
     expect(before.json().conversation).toMatchObject({
       conversationId,
       messages: [{ role: "customer", origin: "platform" }],
@@ -84,6 +100,7 @@ describe("typed demo workflow API", () => {
       url: `/api/v1/conversations/${conversationId}/suggestions`,
     });
     expect(suggestion.statusCode).toBe(201);
+    suggestionResponseSchema.parse(suggestion.json());
     expect(suggestion.json()).toMatchObject({
       schemaVersion: 1,
       suggestion: {
@@ -112,6 +129,7 @@ describe("typed demo workflow API", () => {
 
     const approvals = await server.inject({ method: "GET", url: "/api/v1/approvals" });
     expect(approvals.statusCode).toBe(200);
+    approvalsResponseSchema.parse(approvals.json());
     expect(approvals.json()).toMatchObject({
       pending: [{ proposalId, version: 1, status: "pending_approval" }],
       history: [],
@@ -128,12 +146,18 @@ describe("typed demo workflow API", () => {
     });
     expect(rejectedActorInput.statusCode).toBe(422);
 
+    const decisionPayload = approvalDecisionRequestSchema.parse({
+      outcome: "approved",
+      proposalVersion: 1,
+      comment: "同意退款",
+    });
     const decision = await server.inject({
       method: "POST",
       url: `/api/v1/approvals/${proposalId}/decisions`,
-      payload: { outcome: "approved", proposalVersion: 1, comment: "同意退款" },
+      payload: decisionPayload,
     });
     expect(decision.statusCode).toBe(201);
+    approvalDecisionResponseSchema.parse(decision.json());
     expect(decision.json()).toMatchObject({
       schemaVersion: 1,
       decision: {
@@ -159,6 +183,7 @@ describe("typed demo workflow API", () => {
       payload: { outcome: "approved", proposalVersion: 1 },
     });
     expect(staleDecision.statusCode).toBe(409);
+    errorEnvelopeSchema.parse(staleDecision.json());
     expect(staleDecision.json()).toEqual({
       schemaVersion: 1,
       error: { code: "APPROVAL_CONFLICT", message: "该操作已被处理，请刷新后查看最新状态。" },
@@ -169,6 +194,7 @@ describe("typed demo workflow API", () => {
       url: `/api/v1/actions/${proposalId}/execute`,
     });
     expect(execution.statusCode).toBe(201);
+    executionResponseSchema.parse(execution.json());
     expect(execution.json()).toMatchObject({
       schemaVersion: 1,
       result: { status: "succeeded", proposalId, executionId: "mock-execution-0001" },
@@ -215,6 +241,7 @@ describe("typed demo workflow API", () => {
       url: `/api/v1/audit-events?conversationId=${conversationId}`,
     });
     expect(audit.statusCode).toBe(200);
+    auditEventsResponseSchema.parse(audit.json());
     expect(audit.json().events.map((event: { eventType: string }) => event.eventType)).toEqual([
       "conversation.message_ingested",
       "knowledge.retrieved",
@@ -234,6 +261,7 @@ describe("typed demo workflow API", () => {
 
     const knowledge = await server.inject({ method: "GET", url: "/api/v1/knowledge" });
     expect(knowledge.statusCode).toBe(200);
+    knowledgeResponseSchema.parse(knowledge.json());
     expect(knowledge.json().policies).toHaveLength(1);
     expect(knowledge.json().policies[0]).toMatchObject({
       status: "published",
@@ -316,6 +344,22 @@ describe("typed demo workflow API", () => {
       },
     });
     expect(approvalSchema.properties).not.toHaveProperty("actor");
+
+    const detailErrors = document.paths["/api/v1/conversations/{conversationId}"].get.responses;
+    expect(Object.keys(detailErrors)).toEqual(expect.arrayContaining(["404", "422", "500"]));
+    expectRequired(detailErrors["404"].content["application/json"].schema, [
+      "schemaVersion",
+      "error",
+    ]);
+    const decisionErrors =
+      document.paths["/api/v1/approvals/{proposalId}/decisions"].post.responses;
+    expect(Object.keys(decisionErrors)).toEqual(
+      expect.arrayContaining(["404", "409", "422", "500"]),
+    );
+    expectRequired(decisionErrors["409"].content["application/json"].schema, [
+      "schemaVersion",
+      "error",
+    ]);
 
     const workspaceSchema = responseSchema(document, "/api/v1/workspace", "get", "200");
     const workspaceModel = requiredObject(workspaceSchema, "workspace");

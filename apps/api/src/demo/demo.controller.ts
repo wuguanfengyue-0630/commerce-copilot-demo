@@ -8,7 +8,7 @@ export type DemoStatePort = Readonly<{
     | Readonly<{ status: "incomplete"; acceptedAt: null }>
     | Readonly<{ status: "complete"; acceptedAt: string }>;
   completeSetup(): Readonly<{ status: "complete"; acceptedAt: string }>;
-  reset(): void;
+  reset(): Promise<void>;
 }>;
 
 const actor = Object.freeze({
@@ -33,8 +33,8 @@ export class DemoController {
   @HttpCode(204)
   @ApiOperation({ summary: "Reset the deterministic demo" })
   @ApiNoContentResponse()
-  reset(): void {
-    this.state.reset();
+  async reset(): Promise<void> {
+    await this.state.reset();
   }
 
   @Get("bootstrap")

@@ -22,8 +22,8 @@ export class DemoState {
     return this.setup();
   }
 
-  reset(): void {
-    this.workflow.reset();
+  async reset(): Promise<void> {
+    await this.workflow.reset();
     this.acceptedAt = null;
   }
 }

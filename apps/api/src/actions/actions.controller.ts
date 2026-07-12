@@ -1,11 +1,14 @@
+import {
+  type ExecutionResponse,
+  emptyCommandBodySchema,
+  executionResponseSchema,
+  type ProposalParams,
+  proposalParamsSchema,
+} from "@commerce-copilot/contracts";
 import { Bind, Body, Controller, HttpCode, Inject, Param, Post } from "@nestjs/common";
 import { ApiCreatedResponse, ApiParam, ApiTags } from "@nestjs/swagger";
-import {
-  asOpenApiSchema,
-  emptyCommandBodySchema,
-  executionResponseOpenApiSchema,
-  ProposalParamsDto,
-} from "../common/workflow-dtos.ts";
+import { ApiErrorResponses } from "../common/api-error-responses.ts";
+import { zodToOpenApiSchema } from "../common/zod-openapi.ts";
 import { ZodValidationPipe } from "../common/zod-validation.pipe.ts";
 import { DEMO_WORKFLOW, type DemoWorkflow } from "../demo/demo-workflow.service.ts";
 
@@ -16,13 +19,17 @@ export class ActionsController {
 
   @Post(":proposalId/execute")
   @Bind(
-    Param(new ZodValidationPipe(ProposalParamsDto.schema)),
+    Param(new ZodValidationPipe(proposalParamsSchema)),
     Body(new ZodValidationPipe(emptyCommandBodySchema)),
   )
   @HttpCode(201)
   @ApiParam({ name: "proposalId", type: String })
-  @ApiCreatedResponse({ schema: asOpenApiSchema(executionResponseOpenApiSchema) })
-  execute(params: ProposalParamsDto, _body: undefined | Record<string, never>) {
+  @ApiCreatedResponse({ schema: zodToOpenApiSchema(executionResponseSchema) })
+  @ApiErrorResponses(404, 409, 422, 500)
+  execute(
+    params: ProposalParams,
+    _body: undefined | Record<string, never>,
+  ): Promise<ExecutionResponse> {
     return this.workflow.execute(params.proposalId);
   }
 }
