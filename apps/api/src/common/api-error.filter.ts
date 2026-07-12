@@ -175,7 +175,7 @@ function messageForStatus(status: number): string {
     case HttpStatus.NOT_FOUND:
       return "未找到请求的资源。";
     case HttpStatus.CONFLICT:
-      return "请求与当前状态冲突，请刷新后重试。";
+      return "该操作已被处理，请刷新后查看最新状态。";
     case HttpStatus.UNPROCESSABLE_ENTITY:
       return "请求语义无效，请检查后重试。";
     default:

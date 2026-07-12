@@ -1,11 +1,15 @@
 import { createDemoRuntime, type DemoRuntime } from "@commerce-copilot/application";
 import { type DynamicModule, Module } from "@nestjs/common";
 import { DEMO_STATE, DemoController } from "./demo.controller.ts";
+import { DEMO_WORKFLOW, DemoWorkflow } from "./demo-workflow.service.ts";
 
 export class DemoState {
   private acceptedAt: string | null = null;
 
-  constructor(readonly runtime: DemoRuntime) {}
+  constructor(
+    readonly runtime: DemoRuntime,
+    private readonly workflow: DemoWorkflow,
+  ) {}
 
   setup() {
     return this.acceptedAt === null
@@ -19,7 +23,7 @@ export class DemoState {
   }
 
   reset(): void {
-    this.runtime.reset();
+    this.workflow.reset();
     this.acceptedAt = null;
   }
 }
@@ -28,9 +32,14 @@ export class DemoState {
 export class DemoModule {}
 
 export function createDemoModule(runtime: DemoRuntime = createDemoRuntime()): DynamicModule {
+  const workflow = new DemoWorkflow(runtime);
   return {
     module: DemoModule,
     controllers: [DemoController],
-    providers: [{ provide: DEMO_STATE, useValue: new DemoState(runtime) }],
+    providers: [
+      { provide: DEMO_WORKFLOW, useValue: workflow },
+      { provide: DEMO_STATE, useValue: new DemoState(runtime, workflow) },
+    ],
+    exports: [DEMO_WORKFLOW, DEMO_STATE],
   };
 }
