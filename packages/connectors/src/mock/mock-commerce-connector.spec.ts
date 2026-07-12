@@ -559,6 +559,7 @@ describe("mock commerce connector", () => {
       executionId: "mock-execution-0001",
       idempotencyKey: "refund:deterministic",
       externalReference: "mock-refund-0001",
+      startedAt: "2026-07-11T01:30:00.000Z",
       completedAt: "2026-07-11T02:00:00.000Z",
     });
     expect(Object.isFrozen(result)).toBe(true);

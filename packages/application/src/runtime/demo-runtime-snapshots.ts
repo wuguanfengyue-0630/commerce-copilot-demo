@@ -222,6 +222,7 @@ export function snapshotExecutionResult(
     idempotencyKey: requireNonBlank(result.idempotencyKey),
     status: "succeeded",
     externalReference: requireNonBlank(result.externalReference),
+    startedAt: canonicalTimestamp(result.startedAt),
     correlationId: requireNonBlank(result.correlationId),
     causationId: requireNonBlank(result.causationId),
     completedAt: canonicalTimestamp(result.completedAt),

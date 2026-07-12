@@ -125,6 +125,7 @@ function connectorHarness(options: ConnectorOptions = {}) {
           executionId: "execution-focused-1",
           idempotencyKey: executeCommand.idempotencyKey,
           externalReference: "refund-focused-1",
+          startedAt: executeCommand.executionStartedAt,
           completedAt: toIsoTimestamp("2026-07-11T01:20:00.000Z"),
         });
       results.set(executeCommand.idempotencyKey, result);
@@ -350,6 +351,67 @@ describe("execute approved action", () => {
     expect(test.connector.calls().slice(callsBeforeRecovery)).toEqual(["find"]);
   });
 
+  it("recovers an execution that started before expiry and completed after expiry", async () => {
+    let failOnce = true;
+    const resultAfterExpiry = Object.freeze({
+      status: "succeeded" as const,
+      executionId: "execution-after-expiry",
+      idempotencyKey: `refund:${proposalId}`,
+      externalReference: "refund-after-expiry",
+      startedAt: toIsoTimestamp("2026-07-11T01:20:00.000Z"),
+      completedAt: toIsoTimestamp("2026-07-11T01:41:00.000Z"),
+    });
+    const test = await harness({
+      connector: { resultOverride: resultAfterExpiry },
+      unitOfWork: (runtime) => ({
+        run(context, work) {
+          return runtime.unitOfWork.run(context, (repositories) =>
+            work({
+              ...repositories,
+              executionResults: {
+                ...repositories.executionResults,
+                async save(saveContext, result) {
+                  if (failOnce) {
+                    failOnce = false;
+                    throw new Error("forced result persistence failure");
+                  }
+                  return repositories.executionResults.save(saveContext, result);
+                },
+              },
+            }),
+          );
+        },
+      }),
+    });
+
+    await expect(test.useCase.execute(command)).rejects.toMatchObject({
+      code: "EXECUTION_PERSIST_FAILED",
+    });
+    const callsBeforeRecovery = test.connector.calls().length;
+
+    const recovered = await test.useCase.execute(command);
+
+    expect(recovered).toMatchObject({
+      status: "succeeded",
+      proposal: {
+        status: "executed",
+        executionStartedAt: "2026-07-11T01:20:00.000Z",
+        executionResult: { executedAt: "2026-07-11T01:41:00.000Z" },
+      },
+    });
+    expect(test.connector.calls().slice(callsBeforeRecovery)).toEqual(["find"]);
+    expect(
+      (
+        await test.runtime.repositories.executionAttempts.listByProposal(seedContext, proposalId)
+      ).map((attempt) => attempt.status),
+    ).toEqual(["started", "succeeded"]);
+    expect(
+      (await test.runtime.repositories.auditEvents.list(seedContext))
+        .map((event) => event.eventType)
+        .slice(-2),
+    ).toEqual(["action.execution_started", "action.execution_succeeded"]);
+  });
+
   it("recovers one external effect after local audit persistence rolls back", async () => {
     let failOnce = true;
     const test = await harness({
@@ -387,6 +449,7 @@ describe("execute approved action", () => {
       executionId: "execution-wrong-key",
       idempotencyKey: "refund:wrong-key",
       externalReference: "refund-wrong-key",
+      startedAt: toIsoTimestamp("2026-07-11T01:20:00.000Z"),
       completedAt: toIsoTimestamp("2026-07-11T01:20:00.000Z"),
     }),
     Object.freeze({
@@ -394,6 +457,7 @@ describe("execute approved action", () => {
       executionId: "execution-before-start",
       idempotencyKey: `refund:${proposalId}`,
       externalReference: "refund-before-start",
+      startedAt: toIsoTimestamp("2026-07-11T01:20:00.000Z"),
       completedAt: toIsoTimestamp("2026-07-11T01:19:59.000Z"),
     }),
   ])("blocks an invalid connector result %#", async (resultOverride) => {

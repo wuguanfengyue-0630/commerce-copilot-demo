@@ -18,6 +18,7 @@ export type ExecuteActionCommand = Readonly<{
   proposalId: ProposalId;
   payload: Readonly<AfterSaleRefundPayload>;
   idempotencyKey: string;
+  executionStartedAt: IsoTimestamp;
 }>;
 
 export type ExecutionResult = Readonly<{
@@ -25,6 +26,7 @@ export type ExecutionResult = Readonly<{
   executionId: string;
   idempotencyKey: string;
   externalReference: string;
+  startedAt: IsoTimestamp;
   completedAt: IsoTimestamp;
 }>;
 

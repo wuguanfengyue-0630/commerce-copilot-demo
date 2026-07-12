@@ -91,6 +91,7 @@ export type ExecutionResultRecord = Readonly<{
   idempotencyKey: string;
   status: "succeeded";
   externalReference: string;
+  startedAt: IsoTimestamp;
   correlationId: string;
   causationId: string;
   completedAt: IsoTimestamp;

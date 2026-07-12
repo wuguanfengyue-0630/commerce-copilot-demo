@@ -119,6 +119,7 @@ export function createMockCommerceConnector(
         executionId: `mock-execution-${executionNumber}`,
         idempotencyKey: commandSnapshot.idempotencyKey,
         externalReference: `mock-refund-${executionNumber}`,
+        startedAt: commandSnapshot.executionStartedAt,
         completedAt,
       });
       const record: ExecutionRecord = Object.freeze({ command: commandSnapshot, result });
@@ -217,10 +218,15 @@ function snapshotCommand(command: ExecuteActionCommand): ExecuteActionCommand {
       throw new Error("invalid command");
     }
 
+    const executionStartedAt = toIsoTimestamp(command.executionStartedAt);
+    if (executionStartedAt !== command.executionStartedAt) {
+      throw new Error("invalid execution start");
+    }
     return Object.freeze({
       storeId: command.storeId,
       proposalId: command.proposalId,
       idempotencyKey: command.idempotencyKey,
+      executionStartedAt,
       payload: Object.freeze({
         kind: payload.kind,
         orderId: payload.orderId,

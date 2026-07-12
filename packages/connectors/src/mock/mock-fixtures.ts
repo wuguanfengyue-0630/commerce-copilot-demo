@@ -121,6 +121,7 @@ export type RefundExecutionCommandOverrides = Readonly<{
   proposalId?: ExecuteActionCommand["proposalId"];
   payload?: ExecuteActionCommand["payload"];
   idempotencyKey?: string;
+  executionStartedAt?: IsoTimestamp;
 }>;
 
 export function refundExecutionCommand(
@@ -145,5 +146,6 @@ export function refundExecutionCommand(
     proposalId: overrides.proposalId ?? mockProposalId,
     payload,
     idempotencyKey: overrides.idempotencyKey ?? `refund:${mockProposalId}`,
+    executionStartedAt: overrides.executionStartedAt ?? toIsoTimestamp("2026-07-11T01:30:00.000Z"),
   });
 }

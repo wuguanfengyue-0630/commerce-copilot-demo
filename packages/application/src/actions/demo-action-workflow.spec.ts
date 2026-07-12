@@ -103,6 +103,7 @@ function createConnectorHarness() {
         executionId: "execution-demo-1",
         idempotencyKey: command.idempotencyKey,
         externalReference: "refund-demo-1",
+        startedAt: command.executionStartedAt,
         completedAt: toIsoTimestamp("2026-07-11T02:00:00.000Z"),
       });
       results.set(command.idempotencyKey, result);

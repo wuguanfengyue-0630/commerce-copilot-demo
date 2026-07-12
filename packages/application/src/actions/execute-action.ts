@@ -120,6 +120,7 @@ export function createExecuteActionUseCase(
             dependencies.commerceConnector,
             idempotencyKey,
             proposal.approval.approvedAt,
+            proposal.expiresAt,
           );
           if (recovery.status === "unavailable") {
             return persistBlocked(
@@ -134,7 +135,7 @@ export function createExecuteActionUseCase(
           if (recovery.status === "found") {
             let recoveredExecuting: ExecutingActionProposal;
             try {
-              recoveredExecuting = markExecuting(proposal, recovery.result.completedAt);
+              recoveredExecuting = markExecuting(proposal, recovery.result.startedAt);
             } catch {
               return persistBlocked(
                 repositories,
@@ -151,7 +152,7 @@ export function createExecuteActionUseCase(
               proposal,
               recoveredExecuting,
               idempotencyKey,
-              recovery.result.completedAt,
+              recovery.result.startedAt,
             );
             return persistSucceeded(
               repositories,
@@ -422,14 +423,20 @@ type ExternalResultLookup =
 async function lookupExternalResult(
   connector: CommerceConnector,
   idempotencyKey: string,
-  earliestCompletedAt: ExecutionAttemptRecord["attemptedAt"],
+  earliestStartedAt: ExecutionAttemptRecord["attemptedAt"],
+  latestStartedAtExclusive: ExecutionAttemptRecord["attemptedAt"],
 ): Promise<ExternalResultLookup> {
   try {
     const result = await connector.findActionResult(idempotencyKey);
     if (result === null) {
       return Object.freeze({ status: "absent" });
     }
-    const snapshot = snapshotValidConnectorResult(result, idempotencyKey, earliestCompletedAt);
+    const snapshot = snapshotValidConnectorResult(
+      result,
+      idempotencyKey,
+      earliestStartedAt,
+      latestStartedAtExclusive,
+    );
     return snapshot === null
       ? Object.freeze({ status: "unavailable" })
       : Object.freeze({ status: "found", result: snapshot });
@@ -451,6 +458,7 @@ async function executeOrRecover(
       proposalId: proposal.proposalId,
       payload: proposal.payload,
       idempotencyKey,
+      executionStartedAt,
     });
   } catch {
     try {
@@ -459,13 +467,21 @@ async function executeOrRecover(
       return null;
     }
   }
-  return snapshotValidConnectorResult(result, idempotencyKey, executionStartedAt);
+  return snapshotValidConnectorResult(
+    result,
+    idempotencyKey,
+    executionStartedAt,
+    undefined,
+    executionStartedAt,
+  );
 }
 
 function snapshotValidConnectorResult(
   result: ExecutionResult | null,
   idempotencyKey: string,
-  executionStartedAt: ExecutionAttemptRecord["attemptedAt"],
+  earliestStartedAt: ExecutionAttemptRecord["attemptedAt"],
+  latestStartedAtExclusive?: ExecutionAttemptRecord["attemptedAt"],
+  expectedStartedAt?: ExecutionAttemptRecord["attemptedAt"],
 ): ExecutionResult | null {
   if (
     result === null ||
@@ -477,8 +493,16 @@ function snapshotValidConnectorResult(
     return null;
   }
   try {
+    const startedAt = toIsoTimestamp(result.startedAt);
     const completedAt = toIsoTimestamp(result.completedAt);
-    if (completedAt !== result.completedAt || completedAt < executionStartedAt) {
+    if (
+      startedAt !== result.startedAt ||
+      completedAt !== result.completedAt ||
+      startedAt < earliestStartedAt ||
+      (latestStartedAtExclusive !== undefined && startedAt >= latestStartedAtExclusive) ||
+      (expectedStartedAt !== undefined && startedAt !== expectedStartedAt) ||
+      completedAt < startedAt
+    ) {
       return null;
     }
     return Object.freeze({
@@ -486,6 +510,7 @@ function snapshotValidConnectorResult(
       executionId: result.executionId,
       idempotencyKey,
       externalReference: result.externalReference,
+      startedAt,
       completedAt,
     });
   } catch {
@@ -540,6 +565,7 @@ function executionResult(
     idempotencyKey: result.idempotencyKey,
     status: "succeeded",
     externalReference: result.externalReference,
+    startedAt: result.startedAt,
     correlationId: context.correlationId,
     causationId: context.causationId,
     completedAt: result.completedAt,
