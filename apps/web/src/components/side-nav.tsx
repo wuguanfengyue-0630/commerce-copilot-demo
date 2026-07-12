@@ -14,7 +14,7 @@ import {
 import { usePathname } from "next/navigation";
 
 export const navigationItems = [
-  { label: "总览", href: "/", icon: Gauge },
+  { label: "总览", href: "/overview", icon: Gauge },
   { label: "统一会话", href: "/conversations", icon: MessagesSquare },
   { label: "审批中心", href: "/approvals", icon: ClipboardCheck },
   { label: "知识库", href: "/knowledge", icon: BookOpen },
@@ -30,8 +30,7 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <nav aria-label="主导航" className="flex flex-col gap-1">
       {navigationItems.map(({ label, href, icon: Icon }) => {
-        const active =
-          href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+        const active = pathname === href || pathname.startsWith(`${href}/`);
         return (
           <a
             key={label}

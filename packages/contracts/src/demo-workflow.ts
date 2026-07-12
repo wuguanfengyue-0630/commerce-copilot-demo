@@ -189,6 +189,37 @@ const demoSetupSchema = z.strictObject({
   acceptedAt: isoDateTimeSchema.nullable(),
 });
 
+const demoIncompleteSetupSchema = z.strictObject({
+  status: z.literal("incomplete"),
+  acceptedAt: z.null(),
+});
+
+const demoCompleteSetupSchema = z.strictObject({
+  status: z.literal("complete"),
+  acceptedAt: isoDateTimeSchema,
+});
+
+export const demoBootstrapResponseSchema = z.strictObject({
+  schemaVersion: schemaVersionSchema,
+  actor: z.strictObject({
+    userId: identifierSchema,
+    displayName: nonBlankStringSchema,
+    role: z.literal("owner"),
+  }),
+  setup: z.union([demoIncompleteSetupSchema, demoCompleteSetupSchema]),
+  store: z.strictObject({
+    companyId: identifierSchema,
+    storeId: identifierSchema,
+    displayName: nonBlankStringSchema,
+    platform: z.literal("douyin"),
+  }),
+});
+
+export const demoSetupCompleteResponseSchema = z.strictObject({
+  schemaVersion: schemaVersionSchema,
+  setup: demoCompleteSetupSchema,
+});
+
 export const workspaceResponseSchema = z.strictObject({
   schemaVersion: schemaVersionSchema,
   workspace: z.strictObject({
@@ -314,6 +345,8 @@ export type ProposalParams = z.infer<typeof proposalParamsSchema>;
 export type AuditQuery = z.infer<typeof auditQuerySchema>;
 export type ApprovalDecisionRequest = z.infer<typeof approvalDecisionRequestSchema>;
 export type DemoDecision = z.infer<typeof demoDecisionSchema>;
+export type DemoBootstrapResponse = z.infer<typeof demoBootstrapResponseSchema>;
+export type DemoSetupCompleteResponse = z.infer<typeof demoSetupCompleteResponseSchema>;
 export type WorkspaceResponse = z.infer<typeof workspaceResponseSchema>;
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>;
 export type ConversationDetail = z.infer<typeof conversationDetailSchema>;

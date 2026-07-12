@@ -8,7 +8,7 @@ import { AsyncState } from "./async-state.tsx";
 import { ThemeToggle } from "./theme-toggle.tsx";
 
 const mocks = vi.hoisted(() => ({
-  pathname: "/",
+  pathname: "/overview",
   resolvedTheme: "light" as string | undefined,
   setTheme: vi.fn(),
 }));
@@ -22,7 +22,7 @@ vi.mock("next-themes", () => ({
 }));
 
 beforeEach(() => {
-  mocks.pathname = "/";
+  mocks.pathname = "/overview";
   mocks.resolvedTheme = "light";
   mocks.setTheme.mockClear();
 });
@@ -46,6 +46,7 @@ describe("AppShell", () => {
       expect(screen.getAllByRole("link", { name: item }).length).toBeGreaterThan(0);
     }
     expect(screen.getByRole("link", { name: "总览" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "总览" })).toHaveAttribute("href", "/overview");
     expect(screen.getByText("模拟环境")).toBeVisible();
     expect(screen.getByText(/不会触达真实平台/)).toBeVisible();
     expect(screen.getByText("演示店铺 · 客服主管")).toBeVisible();
