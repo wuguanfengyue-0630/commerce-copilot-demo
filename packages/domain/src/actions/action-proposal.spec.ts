@@ -496,6 +496,7 @@ describe("action proposal state machine", () => {
     expect(blockedExecuting).toMatchObject({
       status: "needs_human",
       version: 4,
+      executionStartedAt: fixedNow,
       needsHuman: { reason: "EXECUTION_UNCONFIRMED", markedAt: fixedNow },
     });
   });

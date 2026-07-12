@@ -359,6 +359,15 @@ describe("action schemas", () => {
     ).toBe(false);
   });
 
+  it("requires a positive observed order version", () => {
+    expect(
+      refundActionPayloadSchema.safeParse({
+        ...refundAction,
+        observedOrder: { ...refundAction.observedOrder, version: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts only canonical proposal statuses", () => {
     expect(actionProposalStatusSchema.options).toEqual(ACTION_PROPOSAL_STATUSES);
 

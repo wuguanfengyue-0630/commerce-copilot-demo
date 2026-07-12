@@ -20,7 +20,7 @@ import type {
   ExecuteActionCommand,
   ExecutionResult,
 } from "../ports/commerce-connector.ts";
-import type { ApplicationUnitOfWork } from "../ports/repositories.ts";
+import { type ApplicationUnitOfWork, RepositoryConflictError } from "../ports/repositories.ts";
 import { createDemoRuntime } from "../runtime/demo-runtime.ts";
 import { createExecuteActionUseCase, type ExecuteApprovedActionCommand } from "./execute-action.ts";
 
@@ -189,6 +189,30 @@ async function harness(
 }
 
 describe("execute approved action", () => {
+  it("maps a proposal CAS conflict to execution conflict", async () => {
+    const test = await harness({
+      unitOfWork: (runtime) => ({
+        run(context, work) {
+          return runtime.unitOfWork.run(context, (repositories) =>
+            work({
+              ...repositories,
+              proposals: {
+                ...repositories.proposals,
+                async replace() {
+                  throw new RepositoryConflictError();
+                },
+              },
+            }),
+          );
+        },
+      }),
+    });
+
+    await expect(test.useCase.execute(command)).rejects.toMatchObject({
+      code: "EXECUTION_CONFLICT",
+    });
+  });
+
   it("returns stable errors for malformed, unauthorized, missing, and non-approved proposals", async () => {
     const test = await harness();
     await expect(test.useCase.execute(null as never)).rejects.toMatchObject({

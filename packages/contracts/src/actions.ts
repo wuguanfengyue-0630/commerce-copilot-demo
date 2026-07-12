@@ -12,7 +12,7 @@ import {
 } from "./api.ts";
 
 export const observedOrderFactsSchema = z.strictObject({
-  version: nonNegativeSafeIntegerSchema,
+  version: nonNegativeSafeIntegerSchema.min(1),
   status: orderStatusSchema,
   total: moneySchema,
   refundable: moneySchema,

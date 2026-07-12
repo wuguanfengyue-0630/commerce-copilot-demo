@@ -22,6 +22,7 @@ import type {
   ExecutionResultRecord,
   OperationContext,
 } from "../ports/repositories.ts";
+import { RepositoryConflictError } from "../ports/repositories.ts";
 import type { ApprovalCommandActor } from "./decide-approval.ts";
 
 export const EXECUTION_ERROR_CODES = [
@@ -241,6 +242,9 @@ export function createExecuteActionUseCase(
       } catch (error) {
         if (error instanceof ExecuteActionError) {
           throw error;
+        }
+        if (error instanceof RepositoryConflictError) {
+          throw new ExecuteActionError("EXECUTION_CONFLICT");
         }
         throw new ExecuteActionError("EXECUTION_PERSIST_FAILED");
       }

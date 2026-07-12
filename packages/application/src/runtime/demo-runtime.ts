@@ -214,7 +214,8 @@ function createRepositories(
           current.companyId !== context.companyId ||
           current.version !== expectedVersion ||
           next.version !== expectedVersion + 1 ||
-          !sameProposalIdentityAndPayload(current, next)
+          !sameProposalIdentityAndPayload(current, next) ||
+          !isValidProposalSuccessor(current, next)
         ) {
           throw new RepositoryConflictError();
         }
@@ -433,5 +434,39 @@ function sameProposalIdentityAndPayload(
       next.payload.observedRefundableAmount.amountMinor &&
     current.payload.observedRefundableAmount.currency ===
       next.payload.observedRefundableAmount.currency
+  );
+}
+
+function isValidProposalSuccessor(
+  current: import("@commerce-copilot/domain").ActionProposal,
+  next: import("@commerce-copilot/domain").ActionProposal,
+): boolean {
+  switch (current.status) {
+    case "pending_approval":
+      return next.status === "approved" || next.status === "rejected";
+    case "approved":
+      return (
+        (next.status === "executing" || next.status === "needs_human") &&
+        sameApproval(current.approval, next.approval)
+      );
+    case "executing":
+      return (
+        (next.status === "executed" || next.status === "needs_human") &&
+        sameApproval(current.approval, next.approval) &&
+        next.executionStartedAt === current.executionStartedAt
+      );
+    default:
+      return false;
+  }
+}
+
+function sameApproval(
+  current: import("@commerce-copilot/domain").ActionApproval,
+  next: import("@commerce-copilot/domain").ActionApproval,
+): boolean {
+  return (
+    current.approvedAt === next.approvedAt &&
+    current.approvedBy.userId === next.approvedBy.userId &&
+    current.approvedBy.role === next.approvedBy.role
   );
 }

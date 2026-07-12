@@ -98,6 +98,7 @@ export type NeedsHumanActionProposal = Readonly<
     ProposalStateSeal<"needs_human"> & {
       status: "needs_human";
       approval: ActionApproval;
+      executionStartedAt?: IsoTimestamp;
       needsHuman: Readonly<{
         reason: string;
         markedAt: IsoTimestamp;
@@ -349,16 +350,16 @@ export function markNeedsHuman(
   if (typeof reason !== "string" || reason.trim().length === 0 || normalizedMarkedAt < earliest) {
     throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
   }
-  return sealProposal(
-    {
-      ...proposalBase(proposal),
-      version: proposal.version + 1,
-      status: "needs_human",
-      approval: proposal.approval,
-      needsHuman: Object.freeze({ reason: reason.trim(), markedAt: normalizedMarkedAt }),
-    },
-    "needs_human",
-  );
+  const snapshot = {
+    ...proposalBase(proposal),
+    version: proposal.version + 1,
+    status: "needs_human" as const,
+    approval: proposal.approval,
+    needsHuman: Object.freeze({ reason: reason.trim(), markedAt: normalizedMarkedAt }),
+  };
+  return proposal.status === "executing"
+    ? sealProposal({ ...snapshot, executionStartedAt: proposal.executionStartedAt }, "needs_human")
+    : sealProposal(snapshot, "needs_human");
 }
 
 function proposalBase(proposal: ActionProposal): ActionProposalBase {

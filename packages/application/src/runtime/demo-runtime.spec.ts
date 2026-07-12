@@ -14,6 +14,8 @@ import {
   createStoreId,
   createSuggestionId,
   createUserId,
+  markExecuted,
+  markExecuting,
   toIsoTimestamp,
 } from "@commerce-copilot/domain";
 import { describe, expect, it } from "vitest";
@@ -361,6 +363,66 @@ describe("demo runtime", () => {
       runtime.repositories.proposals.replace(context, differentApproved, 1),
     ).rejects.toMatchObject({ code: "REPOSITORY_CONFLICT" });
     expect(await runtime.repositories.proposals.get(context, current.proposalId)).toBe(current);
+  });
+
+  it("rejects an issued successor that replaces the current approval lineage", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("proposal-approval-lineage");
+    const currentPending = refundProposal("approval-lineage");
+    const aliceApproved = approveProposal(
+      currentPending,
+      Object.freeze({ userId: createUserId("supervisor-alice"), role: "supervisor" }),
+      "2026-07-11T02:05:00.000Z",
+    );
+    const separatelyIssued = refundProposal("approval-lineage");
+    const bobApproved = approveProposal(
+      separatelyIssued,
+      Object.freeze({ userId: createUserId("supervisor-bob"), role: "supervisor" }),
+      "2026-07-11T02:06:00.000Z",
+    );
+    const bobExecuting = markExecuting(bobApproved, "2026-07-11T02:07:00.000Z");
+    await runtime.repositories.proposals.save(context, currentPending);
+    await runtime.repositories.proposals.replace(context, aliceApproved, currentPending.version);
+
+    await expect(
+      runtime.repositories.proposals.replace(context, bobExecuting, aliceApproved.version),
+    ).rejects.toMatchObject({ code: "REPOSITORY_CONFLICT" });
+    expect(await runtime.repositories.proposals.get(context, currentPending.proposalId)).toBe(
+      aliceApproved,
+    );
+  });
+
+  it("rejects an issued successor that replaces the current execution start", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("proposal-execution-lineage");
+    const actor = Object.freeze({
+      userId: createUserId("supervisor-execution-lineage"),
+      role: "supervisor" as const,
+    });
+    const currentPending = refundProposal("execution-lineage");
+    const currentApproved = approveProposal(currentPending, actor, "2026-07-11T02:05:00.000Z");
+    const currentExecuting = markExecuting(currentApproved, "2026-07-11T02:06:00.000Z");
+    const separatelyIssued = refundProposal("execution-lineage");
+    const otherApproved = approveProposal(separatelyIssued, actor, "2026-07-11T02:05:00.000Z");
+    const otherExecuting = markExecuting(otherApproved, "2026-07-11T02:07:00.000Z");
+    const otherExecuted = markExecuted(otherExecuting, {
+      executionId: "execution-other-lineage",
+      executedAt: toIsoTimestamp("2026-07-11T02:08:00.000Z"),
+    });
+    await runtime.repositories.proposals.save(context, currentPending);
+    await runtime.repositories.proposals.replace(context, currentApproved, currentPending.version);
+    await runtime.repositories.proposals.replace(
+      context,
+      currentExecuting,
+      currentApproved.version,
+    );
+
+    await expect(
+      runtime.repositories.proposals.replace(context, otherExecuted, currentExecuting.version),
+    ).rejects.toMatchObject({ code: "REPOSITORY_CONFLICT" });
+    expect(await runtime.repositories.proposals.get(context, currentPending.proposalId)).toBe(
+      currentExecuting,
+    );
   });
 
   it("rejects deeply frozen spread and JSON proposal forgeries before storage", async () => {
