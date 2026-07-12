@@ -1,5 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ButtonHTMLAttributes, ReactElement, ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "./cn.ts";
 
 const buttonVariants = cva(
@@ -27,13 +28,15 @@ type StandardButtonIntent = Exclude<
 type StandardButtonProps = NativeButtonProps & {
   intent?: StandardButtonIntent;
   impactLabel?: never;
+  icon?: never;
   children?: ReactNode;
 };
 
 type DangerButtonProps = NativeButtonProps & {
   intent: "danger";
   impactLabel: string;
-  children?: ReactElement;
+  icon?: LucideIcon;
+  children?: never;
 };
 
 export type ButtonProps = StandardButtonProps | DangerButtonProps;
@@ -42,6 +45,7 @@ export function Button({
   className,
   intent = "primary",
   impactLabel,
+  icon: Icon,
   type = "button",
   children,
   ...props
@@ -53,8 +57,14 @@ export function Button({
       data-intent={intent}
       {...props}
     >
-      {children}
-      {intent === "danger" && <span>{impactLabel}</span>}
+      {intent === "danger" ? (
+        <>
+          {Icon && <Icon aria-hidden="true" className="size-4 shrink-0" />}
+          <span>{impactLabel}</span>
+        </>
+      ) : (
+        children
+      )}
     </button>
   );
 }

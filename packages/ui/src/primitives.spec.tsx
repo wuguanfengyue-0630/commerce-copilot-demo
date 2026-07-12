@@ -46,15 +46,12 @@ describe("design system primitives", () => {
   });
 
   it("uses the explicit destructive impact as the visible command label", () => {
-    render(
-      <Button intent="danger" impactLabel="批准退款 ¥128.00">
-        <Trash2 aria-hidden="true" />
-      </Button>,
-    );
+    render(<Button intent="danger" impactLabel="批准退款 ¥128.00" icon={Trash2} />);
 
     const command = screen.getByRole("button", { name: "批准退款 ¥128.00" });
     expect(command).toBeEnabled();
     expect(command).toHaveTextContent("批准退款 ¥128.00");
+    expect(command).not.toHaveTextContent("模糊操作");
     expect(command.querySelector("svg")).toBeInTheDocument();
   });
 
