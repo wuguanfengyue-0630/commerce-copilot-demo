@@ -18,7 +18,7 @@ import {
   HttpException,
   HttpStatus,
 } from "@nestjs/common";
-import { ZodError } from "zod";
+import { RequestValidationError } from "./contract-boundary.ts";
 
 export type ApiErrorLogger = Readonly<{
   error(message: unknown, ...optionalParams: unknown[]): void;
@@ -98,11 +98,11 @@ export class ApiErrorFilter implements ExceptionFilter {
 }
 
 function toApiError(exception: unknown): { status: number; body: ErrorEnvelope } {
-  if (exception instanceof ZodError) {
+  if (exception instanceof RequestValidationError) {
     return {
       status: HttpStatus.UNPROCESSABLE_ENTITY,
       body: errorEnvelope("VALIDATION_ERROR", "请求数据不符合接口要求。", {
-        issues: exception.issues.map((issue) => ({
+        issues: exception.validationError.issues.map((issue) => ({
           code: issue.code,
           path: issue.path.map(String),
           message: issue.message,

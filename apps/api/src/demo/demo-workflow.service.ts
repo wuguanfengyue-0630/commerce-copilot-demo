@@ -39,6 +39,7 @@ import {
   toIsoTimestamp,
 } from "@commerce-copilot/domain";
 import { NotFoundException } from "@nestjs/common";
+import { parseResponse } from "../common/contract-boundary.ts";
 
 export const DEMO_WORKFLOW = Symbol("DEMO_WORKFLOW");
 
@@ -98,7 +99,7 @@ export class DemoWorkflow {
       context("workspace", "workspace"),
       seededConversationId,
     );
-    return workspaceResponseSchema.parse({
+    return parseResponse(workspaceResponseSchema, {
       schemaVersion: SCHEMA_VERSION,
       workspace: {
         companyId,
@@ -144,7 +145,7 @@ export class DemoWorkflow {
   async conversations() {
     const conversation = await this.loadConversation(seededConversationId);
     const latest = conversation.messages.at(-1);
-    return conversationListResponseSchema.parse({
+    return parseResponse(conversationListResponseSchema, {
       schemaVersion: SCHEMA_VERSION,
       conversations: [
         {
@@ -179,7 +180,7 @@ export class DemoWorkflow {
     );
     const latestSuggestion = suggestions.at(-1) ?? null;
     const proposal = proposals.at(-1);
-    return conversationDetailResponseSchema.parse({
+    return parseResponse(conversationDetailResponseSchema, {
       schemaVersion: SCHEMA_VERSION,
       conversation: {
         companyId: conversation.companyId,
@@ -214,7 +215,7 @@ export class DemoWorkflow {
         causationId: conversation.messages[0]?.messageId ?? conversationId,
         actorRole: "supervisor",
       });
-      return suggestionResponseSchema.parse({
+      return parseResponse(suggestionResponseSchema, {
         schemaVersion: SCHEMA_VERSION,
         suggestion: presentSuggestion(result.suggestion),
         proposal: result.proposal === undefined ? null : presentProposal(result.proposal),
@@ -240,7 +241,11 @@ export class DemoWorkflow {
       );
       history.push(...decisions.map(presentDecision));
     }
-    return approvalsResponseSchema.parse({ schemaVersion: SCHEMA_VERSION, pending, history });
+    return parseResponse(approvalsResponseSchema, {
+      schemaVersion: SCHEMA_VERSION,
+      pending,
+      history,
+    });
   }
 
   async decide(rawProposalId: string, input: ApprovalDecisionRequest) {
@@ -256,7 +261,7 @@ export class DemoWorkflow {
         correlationId: workflowCorrelation(seededConversationId),
         causationId: proposalId,
       });
-      return approvalDecisionResponseSchema.parse({
+      return parseResponse(approvalDecisionResponseSchema, {
         schemaVersion: SCHEMA_VERSION,
         decision: presentDecision(result.decision),
         proposal: presentProposal(result.proposal),
@@ -275,12 +280,12 @@ export class DemoWorkflow {
         causationId: proposalId,
       });
       if (result.status === "needs_human") {
-        return executionResponseSchema.parse({
+        return parseResponse(executionResponseSchema, {
           schemaVersion: SCHEMA_VERSION,
           result: { status: result.status, proposalId, reason: result.reason },
         });
       }
-      return executionResponseSchema.parse({
+      return parseResponse(executionResponseSchema, {
         schemaVersion: SCHEMA_VERSION,
         result: {
           status: "succeeded" as const,
@@ -301,7 +306,7 @@ export class DemoWorkflow {
       query: "damaged_item",
       evaluatedAt: generatedAt,
     });
-    return knowledgeResponseSchema.parse({
+    return parseResponse(knowledgeResponseSchema, {
       schemaVersion: SCHEMA_VERSION,
       policies: policies.map((policy) => ({
         policyId: "policy-damaged-item-refund-v1",
@@ -329,7 +334,10 @@ export class DemoWorkflow {
       conversationId,
     );
     if (conversation === null) {
-      return auditEventsResponseSchema.parse({ schemaVersion: SCHEMA_VERSION, events: [] });
+      return parseResponse(auditEventsResponseSchema, {
+        schemaVersion: SCHEMA_VERSION,
+        events: [],
+      });
     }
     const acceptedCorrelations = new Set([workflowCorrelation(conversationId)]);
     const acceptedCausations = new Set(
@@ -343,7 +351,7 @@ export class DemoWorkflow {
     const events = await this.runtime.repositories.auditEvents.list(
       context("audit-read", "audit-read"),
     );
-    return auditEventsResponseSchema.parse({
+    return parseResponse(auditEventsResponseSchema, {
       schemaVersion: SCHEMA_VERSION,
       events: events.filter(
         (event) =>

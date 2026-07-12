@@ -1,4 +1,4 @@
-import { createDemoRuntime } from "@commerce-copilot/application";
+import { createDemoRuntime, type DemoRuntime } from "@commerce-copilot/application";
 import {
   approvalDecisionRequestSchema,
   approvalDecisionResponseSchema,
@@ -12,7 +12,7 @@ import {
   suggestionResponseSchema,
   workspaceResponseSchema,
 } from "@commerce-copilot/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/create-app.ts";
 
 const conversationId = "conversation-damaged-item-1";
@@ -282,7 +282,10 @@ describe("typed demo workflow API", () => {
     expect(invalidQuery.statusCode).toBe(422);
     expect(invalidQuery.json()).toMatchObject({
       schemaVersion: 1,
-      error: { code: "VALIDATION_ERROR" },
+      error: {
+        code: "VALIDATION_ERROR",
+        details: { issues: [{ path: ["conversationId"] }] },
+      },
     });
 
     const missing = await server.inject({
@@ -291,6 +294,45 @@ describe("typed demo workflow API", () => {
     });
     expect(missing.statusCode).toBe(404);
     expect(JSON.stringify(missing.json())).not.toContain("stack");
+  });
+
+  it("treats canonical response mismatches as sanitized server failures", async () => {
+    const runtime = createDemoRuntime();
+    const invalidRuntime: DemoRuntime = {
+      repositories: {
+        ...runtime.repositories,
+        conversations: {
+          async get(context, id) {
+            const conversation = await runtime.repositories.conversations.get(context, id);
+            return conversation === null
+              ? null
+              : ({ ...conversation, customerId: "" } as typeof conversation);
+          },
+        },
+      },
+      unitOfWork: runtime.unitOfWork,
+      reset: runtime.reset,
+    };
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const app = await createApp({ mode: "demo", runtime: invalidRuntime, logger });
+    openApps.push(app);
+    logger.error.mockClear();
+
+    const response = await app.getHttpAdapter().getInstance().inject({
+      method: "GET",
+      url: "/api/v1/conversations",
+    });
+    const serialized = JSON.stringify(response.json());
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      schemaVersion: 1,
+      error: { code: "INTERNAL_ERROR", message: "服务暂时不可用，请稍后重试。" },
+    });
+    expect(serialized).not.toContain("issues");
+    expect(serialized).not.toContain("customerId");
+    expect(serialized).not.toContain("stack");
+    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -330,6 +372,14 @@ describe("typed demo workflow API", () => {
         "/api/v1/audit-events",
       ]),
     );
+    const references = collectReferences(document);
+    for (const reference of references) {
+      expect(
+        resolveReference(document, reference),
+        `Unresolved OpenAPI ref ${reference}`,
+      ).toBeDefined();
+    }
+    expect(findTypeLessNullableUnions(document)).toEqual([]);
     const approvalSchema =
       document.paths["/api/v1/approvals/{proposalId}/decisions"].post.requestBody.content[
         "application/json"
@@ -699,4 +749,45 @@ function oneOfStatus(schema: OpenApiSchema, status: string): OpenApiSchema {
   );
   if (branch === undefined) throw new Error(`Missing OpenAPI oneOf status ${status}`);
   return branch;
+}
+
+function collectReferences(value: unknown, references: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) collectReferences(item, references);
+  } else if (value !== null && typeof value === "object") {
+    for (const [key, nested] of Object.entries(value)) {
+      if (key === "$ref" && typeof nested === "string") references.push(nested);
+      else collectReferences(nested, references);
+    }
+  }
+  return references;
+}
+
+function resolveReference(document: unknown, reference: string): unknown {
+  if (!reference.startsWith("#/")) return undefined;
+  return reference
+    .slice(2)
+    .split("/")
+    .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"))
+    .reduce<unknown>((current, segment) => {
+      if (current === null || typeof current !== "object") return undefined;
+      return (current as Record<string, unknown>)[segment];
+    }, document);
+}
+
+function findTypeLessNullableUnions(value: unknown, paths: string[] = [], path = "$"): string[] {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      findTypeLessNullableUnions(item, paths, `${path}[${index}]`);
+    });
+  } else if (value !== null && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    if (object.nullable === true && Array.isArray(object.oneOf) && object.type === undefined) {
+      paths.push(path);
+    }
+    for (const [key, nested] of Object.entries(object)) {
+      findTypeLessNullableUnions(nested, paths, `${path}.${key}`);
+    }
+  }
+  return paths;
 }

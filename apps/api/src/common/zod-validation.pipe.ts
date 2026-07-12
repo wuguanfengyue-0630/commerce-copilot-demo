@@ -1,5 +1,6 @@
 import { type ArgumentMetadata, Injectable, type PipeTransform } from "@nestjs/common";
-import type { ZodType } from "zod";
+import { ZodError, type ZodType } from "zod";
+import { RequestValidationError } from "./contract-boundary.ts";
 
 type ZodDto = Readonly<{ schema?: ZodType }>;
 
@@ -9,6 +10,12 @@ export class ZodValidationPipe implements PipeTransform {
 
   transform(value: unknown, metadata: ArgumentMetadata): unknown {
     const schema = this.explicitSchema ?? (metadata.metatype as ZodDto | undefined)?.schema;
-    return schema === undefined ? value : schema.parse(value);
+    if (schema === undefined) return value;
+    try {
+      return schema.parse(value);
+    } catch (error) {
+      if (error instanceof ZodError) throw new RequestValidationError(error);
+      throw error;
+    }
   }
 }

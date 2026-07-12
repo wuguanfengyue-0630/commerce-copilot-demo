@@ -1,10 +1,10 @@
 import { errorEnvelopeSchema } from "@commerce-copilot/contracts";
 import { applyDecorators } from "@nestjs/common";
 import { ApiResponse } from "@nestjs/swagger";
-import { zodToOpenApiSchema } from "./zod-openapi.ts";
+import { errorEnvelopeToOpenApiSchema } from "./zod-openapi.ts";
 
 export function ApiErrorResponses(...statuses: readonly number[]): MethodDecorator {
-  const schema = zodToOpenApiSchema(errorEnvelopeSchema);
+  const schema = errorEnvelopeToOpenApiSchema(errorEnvelopeSchema);
   return applyDecorators(
     ...statuses.map((status) => ApiResponse({ status, description: description(status), schema })),
   );

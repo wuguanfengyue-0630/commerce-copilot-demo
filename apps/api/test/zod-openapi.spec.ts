@@ -1,9 +1,10 @@
 import {
   approvalDecisionRequestSchema,
+  errorEnvelopeSchema,
   executionResponseSchema,
 } from "@commerce-copilot/contracts";
 import { describe, expect, it } from "vitest";
-import { zodToOpenApiSchema } from "../src/common/zod-openapi.ts";
+import { errorEnvelopeToOpenApiSchema, zodToOpenApiSchema } from "../src/common/zod-openapi.ts";
 
 describe("Zod OpenAPI adapter", () => {
   it("converts strict requests and literals without duplicating the contract", () => {
@@ -26,5 +27,16 @@ describe("Zod OpenAPI adapter", () => {
 
     expect(schema.properties.result.type).toBe("object");
     expect(schema.properties.result.oneOf).toHaveLength(2);
+  });
+
+  it("documents JSON error details as free-form without unresolved definitions", () => {
+    const schema = errorEnvelopeToOpenApiSchema(errorEnvelopeSchema) as {
+      definitions?: unknown;
+      properties: { error: { properties: { details: unknown } } };
+    };
+
+    expect(schema.definitions).toBeUndefined();
+    expect(schema.properties.error.properties.details).toEqual({});
+    expect(JSON.stringify(schema)).not.toContain("#/definitions/");
   });
 });

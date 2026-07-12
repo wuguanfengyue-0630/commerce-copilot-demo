@@ -9,6 +9,15 @@ export function zodToOpenApiSchema(schema: ZodType): SwaggerSchema {
   return normalizeSchema(jsonSchema) as SwaggerSchema;
 }
 
+export function errorEnvelopeToOpenApiSchema(schema: ZodType): SwaggerSchema {
+  const openApiSchema = zodToOpenApiSchema(schema) as JsonSchema;
+  const error = property(property(openApiSchema, "properties"), "error");
+  const errorProperties = property(error, "properties");
+  errorProperties.details = {};
+  delete openApiSchema.definitions;
+  return openApiSchema as SwaggerSchema;
+}
+
 function normalizeSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizeSchema);
   if (value === null || typeof value !== "object") return value;
@@ -48,4 +57,10 @@ function normalizeSchema(value: unknown): unknown {
 
 function isJsonSchema(value: unknown): value is JsonSchema {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function property(schema: JsonSchema, key: string): JsonSchema {
+  const value = schema[key];
+  if (!isJsonSchema(value)) throw new Error(`Missing generated schema property ${key}`);
+  return value;
 }

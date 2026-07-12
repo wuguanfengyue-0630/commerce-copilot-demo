@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ZodError, z } from "zod";
+import { z } from "zod";
+import { RequestValidationError } from "../src/common/contract-boundary.ts";
 import { ZodValidationPipe } from "../src/common/zod-validation.pipe.ts";
 
 class SyntheticDto {
@@ -16,12 +17,12 @@ describe("ZodValidationPipe", () => {
     ).toEqual({ count: 2 });
   });
 
-  it("throws a ZodError for invalid static-schema input", () => {
+  it("throws a RequestValidationError for invalid static-schema input", () => {
     const pipe = new ZodValidationPipe();
 
     expect(() =>
       pipe.transform({ count: 0 }, { type: "body", metatype: SyntheticDto, data: undefined }),
-    ).toThrow(ZodError);
+    ).toThrow(RequestValidationError);
   });
 
   it("passes values through when a metatype has no static schema", () => {

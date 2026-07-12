@@ -20,6 +20,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ApiErrorFilter } from "../src/common/api-error.filter.ts";
+import { RequestValidationError, ResponseContractError } from "../src/common/contract-boundary.ts";
 
 describe("ApiErrorFilter", () => {
   it.each([
@@ -55,13 +56,32 @@ describe("ApiErrorFilter", () => {
   it("returns contract-compatible Zod validation details", () => {
     const schema = z.strictObject({ name: z.string().min(1) });
     const validationError = captureError(() => schema.parse({ name: "", extra: true }));
-    const result = invokeFilter(new ApiErrorFilter(), validationError);
+    const result = invokeFilter(
+      new ApiErrorFilter(),
+      new RequestValidationError(validationError as import("zod").ZodError),
+    );
 
     expect(result.status).toBe(422);
     expect(errorEnvelopeSchema.parse(result.body)).toMatchObject({
       schemaVersion: SCHEMA_VERSION,
       error: { code: "VALIDATION_ERROR", details: { issues: expect.any(Array) } },
     });
+  });
+
+  it.each(["raw", "response"])("treats %s Zod failures as server errors", (kind) => {
+    const validationError = captureError(() => z.string().parse(1)) as import("zod").ZodError;
+    const error =
+      kind === "response" ? new ResponseContractError(validationError) : validationError;
+    const logger = { error: vi.fn() };
+    const result = invokeFilter(new ApiErrorFilter(logger), error);
+
+    expect(result.status).toBe(500);
+    expect(result.body).toEqual({
+      schemaVersion: SCHEMA_VERSION,
+      error: { code: "INTERNAL_ERROR", message: "服务暂时不可用，请稍后重试。" },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("issues");
+    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
   it.each([
