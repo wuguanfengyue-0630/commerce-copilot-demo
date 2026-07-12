@@ -72,6 +72,31 @@ describe("apiRequest", () => {
     );
   });
 
+  it("uses the trusted absolute URL when fetching during SSR", async () => {
+    vi.stubGlobal("location", undefined);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    try {
+      await apiRequest(
+        "/api/v1/workspace?x=1",
+        { safeParse: (value) => ({ success: true, data: value }) },
+        { baseUrl, fetcher },
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://console.example.test/api/v1/workspace?x=1",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+  });
+
   it.each([
     { "content-type": "application/json", "x-trace-id": "object" },
     new Headers({ "content-type": "application/json", "x-trace-id": "headers" }),

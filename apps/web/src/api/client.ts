@@ -49,9 +49,12 @@ export async function apiRequest<T>(
     headers.set("accept", "application/json");
   }
 
+  const requestTarget =
+    browserOrigin === undefined ? normalized.href : `${normalized.pathname}${normalized.search}`;
+
   let response: Response;
   try {
-    response = await fetcher(`${normalized.pathname}${normalized.search}`, {
+    response = await fetcher(requestTarget, {
       ...init,
       headers,
     });
