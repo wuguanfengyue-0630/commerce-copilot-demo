@@ -318,7 +318,7 @@ describe("demo runtime", () => {
     await expect(
       runtime.repositories.proposals.replace(context, approved, 1),
     ).rejects.toMatchObject({
-      code: "DEMO_RUNTIME_CONFLICT",
+      code: "REPOSITORY_CONFLICT",
     });
   });
 
@@ -358,7 +358,7 @@ describe("demo runtime", () => {
     await runtime.repositories.proposals.save(context, current);
     await expect(
       runtime.repositories.proposals.replace(context, differentApproved, 1),
-    ).rejects.toMatchObject({ code: "DEMO_RUNTIME_CONFLICT" });
+    ).rejects.toMatchObject({ code: "REPOSITORY_CONFLICT" });
     expect(await runtime.repositories.proposals.get(context, current.proposalId)).toBe(current);
   });
 

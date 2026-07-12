@@ -15,6 +15,7 @@ import type {
   PublishedKnowledgeRepository,
   SuggestionRepository,
 } from "../ports/repositories.ts";
+import { RepositoryConflictError } from "../ports/repositories.ts";
 import { DemoRuntimeError } from "./demo-runtime-error.ts";
 import {
   assertContext,
@@ -215,7 +216,7 @@ function createRepositories(
           next.version !== expectedVersion + 1 ||
           !sameProposalIdentityAndPayload(current, next)
         ) {
-          throw new DemoRuntimeError("DEMO_RUNTIME_CONFLICT");
+          throw new RepositoryConflictError();
         }
         proposals.set(next.proposalId, next);
       },

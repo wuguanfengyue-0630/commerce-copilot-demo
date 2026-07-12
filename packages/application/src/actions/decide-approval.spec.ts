@@ -163,6 +163,51 @@ describe("decide approval", () => {
     ).toHaveLength(1);
   });
 
+  it("maps a CAS conflict after concurrent stale reads to approval conflict", async () => {
+    const runtime = createDemoRuntime();
+    await runtime.repositories.proposals.save(seedContext, pendingProposal());
+    let reads = 0;
+    let releaseReads = (): void => undefined;
+    const bothRead = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const unitOfWork: ApplicationUnitOfWork = {
+      run(_context, work) {
+        return work({
+          ...runtime.repositories,
+          proposals: {
+            ...runtime.repositories.proposals,
+            async get(getContext, requestedProposalId) {
+              const proposal = await runtime.repositories.proposals.get(
+                getContext,
+                requestedProposalId,
+              );
+              reads += 1;
+              if (reads === 2) releaseReads();
+              await bothRead;
+              return proposal;
+            },
+          },
+        });
+      },
+    };
+    const useCase = createDecideApprovalUseCase({
+      repositories: runtime.repositories,
+      unitOfWork,
+      clock: new FixedClock(new Date("2026-07-11T01:20:00.000Z")),
+    });
+
+    const settled = await Promise.allSettled([
+      useCase.execute(command()),
+      useCase.execute(command()),
+    ]);
+
+    expect(settled.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
+    expect(settled.find((entry) => entry.status === "rejected")).toMatchObject({
+      reason: { code: "APPROVAL_CONFLICT" },
+    });
+  });
+
   it("rejects without creating execution records", async () => {
     const { runtime, useCase } = await harness();
 

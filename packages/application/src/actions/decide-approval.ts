@@ -16,6 +16,7 @@ import type {
   ApprovalDecisionRecord,
   OperationContext,
 } from "../ports/repositories.ts";
+import { RepositoryConflictError } from "../ports/repositories.ts";
 
 export const APPROVAL_ERROR_CODES = [
   "APPROVAL_INVALID_COMMAND",
@@ -126,6 +127,9 @@ export function createDecideApprovalUseCase(
       } catch (error) {
         if (error instanceof ApprovalError) {
           throw error;
+        }
+        if (error instanceof RepositoryConflictError) {
+          throw new ApprovalError("APPROVAL_CONFLICT");
         }
         throw new ApprovalError("APPROVAL_PERSIST_FAILED");
       }

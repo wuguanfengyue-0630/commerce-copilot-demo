@@ -24,6 +24,15 @@ export type OperationContext = Readonly<{
   causationId: string;
 }>;
 
+export class RepositoryConflictError extends Error {
+  readonly code = "REPOSITORY_CONFLICT";
+
+  constructor() {
+    super("REPOSITORY_CONFLICT");
+    this.name = "RepositoryConflictError";
+  }
+}
+
 export type PublishedKnowledgeSearch = Readonly<
   OperationContext & {
     storeId: StoreId;

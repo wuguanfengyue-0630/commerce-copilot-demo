@@ -88,12 +88,14 @@ function connectorHarness(options: ConnectorOptions = {}) {
   let effects = 0;
   let executeCalls = 0;
   let findCalls = 0;
+  const calls: string[] = [];
   const results = new Map<string, ExecutionResult>();
   const connector: CommerceConnector = Object.freeze({
     async getCapabilities(): Promise<readonly CapabilityState[]> {
       return Object.freeze([]);
     },
     async getOrder(): Promise<OrderSnapshot> {
+      calls.push("getOrder");
       const observed = currentOrder;
       if (options.driftAfterGet !== undefined) {
         currentOrder = options.driftAfterGet;
@@ -101,6 +103,7 @@ function connectorHarness(options: ConnectorOptions = {}) {
       return observed;
     },
     async executeAction(executeCommand: ExecuteActionCommand): Promise<ExecutionResult> {
+      calls.push("execute");
       executeCalls += 1;
       const existing = results.get(executeCommand.idempotencyKey);
       if (existing !== undefined) {
@@ -131,6 +134,7 @@ function connectorHarness(options: ConnectorOptions = {}) {
       return result;
     },
     async findActionResult(idempotencyKey: string): Promise<ExecutionResult | null> {
+      calls.push("find");
       findCalls += 1;
       if (options.findThrows === true) {
         throw new Error("lookup unavailable");
@@ -146,6 +150,7 @@ function connectorHarness(options: ConnectorOptions = {}) {
     effects: () => effects,
     executeCalls: () => executeCalls,
     findCalls: () => findCalls,
+    calls: () => [...calls],
     setOrder(next: OrderSnapshot): void {
       currentOrder = next;
     },
@@ -259,14 +264,30 @@ describe("execute approved action", () => {
 
     expect(result.status).toBe("succeeded");
     expect(test.connector.effects()).toBe(1);
-    expect(test.connector.findCalls()).toBe(1);
+    expect(test.connector.findCalls()).toBe(2);
+    expect(test.connector.calls()).toEqual(["find", "getOrder", "execute", "find"]);
   });
 
   it.each([
-    { lookup: "null", options: { executeThrowsAfterEffect: true, findReturnsNull: true } },
-    { lookup: "throw", options: { executeThrowsAfterEffect: true, findThrows: true } },
+    {
+      lookup: "null",
+      options: { executeThrowsAfterEffect: true, findReturnsNull: true },
+      expectedVersion: 4,
+      expectedEffects: 1,
+      expectedExecuteCalls: 1,
+    },
+    {
+      lookup: "throw",
+      options: { executeThrowsAfterEffect: true, findThrows: true },
+      expectedVersion: 3,
+      expectedEffects: 0,
+      expectedExecuteCalls: 0,
+    },
   ])("persists needs-human when recovery lookup returns $lookup and never retries", async ({
     options,
+    expectedVersion,
+    expectedEffects,
+    expectedExecuteCalls,
   }) => {
     const test = await harness({ connector: options });
 
@@ -275,12 +296,12 @@ describe("execute approved action", () => {
 
     expect(first).toMatchObject({
       status: "needs_human",
-      proposal: { status: "needs_human", version: 4 },
+      proposal: { status: "needs_human", version: expectedVersion },
       reason: "EXECUTION_UNCONFIRMED",
     });
     expect(second).toEqual(first);
-    expect(test.connector.executeCalls()).toBe(1);
-    expect(test.connector.effects()).toBe(1);
+    expect(test.connector.executeCalls()).toBe(expectedExecuteCalls);
+    expect(test.connector.effects()).toBe(expectedEffects);
   });
 
   it("blocks a post-getOrder race at the adapter gate", async () => {
@@ -321,10 +342,12 @@ describe("execute approved action", () => {
     await expect(test.useCase.execute(command)).rejects.toMatchObject({
       code: "EXECUTION_PERSIST_FAILED",
     });
+    const callsBeforeRecovery = test.connector.calls().length;
     const recovered = await test.useCase.execute(command);
 
     expect(recovered.status).toBe("succeeded");
     expect(test.connector.effects()).toBe(1);
+    expect(test.connector.calls().slice(callsBeforeRecovery)).toEqual(["find"]);
   });
 
   it("recovers one external effect after local audit persistence rolls back", async () => {

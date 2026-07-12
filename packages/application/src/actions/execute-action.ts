@@ -116,6 +116,51 @@ export function createExecuteActionUseCase(
           }
 
           const evaluatedAt = toIsoTimestamp(dependencies.clock.now());
+          const recovery = await lookupExternalResult(
+            dependencies.commerceConnector,
+            idempotencyKey,
+            proposal.approval.approvedAt,
+          );
+          if (recovery.status === "unavailable") {
+            return persistBlocked(
+              repositories,
+              context,
+              proposal,
+              idempotencyKey,
+              evaluatedAt,
+              "EXECUTION_UNCONFIRMED",
+            );
+          }
+          if (recovery.status === "found") {
+            let recoveredExecuting: ExecutingActionProposal;
+            try {
+              recoveredExecuting = markExecuting(proposal, recovery.result.completedAt);
+            } catch {
+              return persistBlocked(
+                repositories,
+                context,
+                proposal,
+                idempotencyKey,
+                evaluatedAt,
+                "EXECUTION_UNCONFIRMED",
+              );
+            }
+            await persistExecutionStarted(
+              repositories,
+              context,
+              proposal,
+              recoveredExecuting,
+              idempotencyKey,
+              recovery.result.completedAt,
+            );
+            return persistSucceeded(
+              repositories,
+              context,
+              proposal,
+              recoveredExecuting,
+              recovery.result,
+            );
+          }
           if (evaluatedAt >= proposal.expiresAt) {
             return persistBlocked(
               repositories,
@@ -165,20 +210,13 @@ export function createExecuteActionUseCase(
           }
 
           const executing = markExecuting(proposal, evaluatedAt);
-          await repositories.proposals.replace(context, executing, proposal.version);
-          await repositories.executionAttempts.save(
+          await persistExecutionStarted(
+            repositories,
             context,
-            executionAttempt(proposal, context, idempotencyKey, "started", evaluatedAt),
-          );
-          await repositories.auditEvents.append(
-            context,
-            executionAudit(
-              proposal,
-              context,
-              "05-execution-started",
-              "action.execution_started",
-              evaluatedAt,
-            ),
+            proposal,
+            executing,
+            idempotencyKey,
+            evaluatedAt,
           );
 
           const connectorResult = await executeOrRecover(
@@ -197,38 +235,7 @@ export function createExecuteActionUseCase(
             );
           }
 
-          const executed = markExecuted(executing, {
-            executionId: connectorResult.executionId,
-            executedAt: connectorResult.completedAt,
-          });
-          const storedResult = executionResult(proposal, context, connectorResult);
-          await repositories.proposals.replace(context, executed, executing.version);
-          await repositories.executionResults.save(context, storedResult);
-          await repositories.executionAttempts.save(
-            context,
-            executionAttempt(
-              proposal,
-              context,
-              idempotencyKey,
-              "succeeded",
-              connectorResult.completedAt,
-            ),
-          );
-          await repositories.auditEvents.append(
-            context,
-            executionAudit(
-              proposal,
-              context,
-              "06-execution-succeeded",
-              "action.execution_succeeded",
-              connectorResult.completedAt,
-            ),
-          );
-          return Object.freeze({
-            status: "succeeded",
-            proposal: executed,
-            executionResult: storedResult,
-          });
+          return persistSucceeded(repositories, context, proposal, executing, connectorResult);
         });
       } catch (error) {
         if (error instanceof ExecuteActionError) {
@@ -278,13 +285,75 @@ async function loadExecutedResult(
   return Object.freeze({ status: "succeeded", proposal, executionResult: storedResult });
 }
 
+async function persistExecutionStarted(
+  repositories: ApplicationRepositories,
+  context: OperationContext,
+  proposal: ApprovedActionProposal,
+  executing: ExecutingActionProposal,
+  idempotencyKey: string,
+  executionStartedAt: ExecutionAttemptRecord["attemptedAt"],
+): Promise<void> {
+  await repositories.proposals.replace(context, executing, proposal.version);
+  await repositories.executionAttempts.save(
+    context,
+    executionAttempt(proposal, context, idempotencyKey, "started", executionStartedAt),
+  );
+  await repositories.auditEvents.append(
+    context,
+    executionAudit(
+      proposal,
+      context,
+      "05-execution-started",
+      "action.execution_started",
+      executionStartedAt,
+    ),
+  );
+}
+
+async function persistSucceeded(
+  repositories: ApplicationRepositories,
+  context: OperationContext,
+  proposal: ApprovedActionProposal,
+  executing: ExecutingActionProposal,
+  connectorResult: ExecutionResult,
+): Promise<ExecuteActionSucceeded> {
+  const executed = markExecuted(executing, {
+    executionId: connectorResult.executionId,
+    executedAt: connectorResult.completedAt,
+  });
+  const storedResult = executionResult(proposal, context, connectorResult);
+  await repositories.proposals.replace(context, executed, executing.version);
+  await repositories.executionResults.save(context, storedResult);
+  await repositories.executionAttempts.save(
+    context,
+    executionAttempt(
+      proposal,
+      context,
+      connectorResult.idempotencyKey,
+      "succeeded",
+      connectorResult.completedAt,
+    ),
+  );
+  await repositories.auditEvents.append(
+    context,
+    executionAudit(
+      proposal,
+      context,
+      "06-execution-succeeded",
+      "action.execution_succeeded",
+      connectorResult.completedAt,
+    ),
+  );
+  return Object.freeze({ status: "succeeded", proposal: executed, executionResult: storedResult });
+}
+
 async function persistBlocked(
   repositories: ApplicationRepositories,
   context: OperationContext,
   proposal: ApprovedActionProposal,
   idempotencyKey: string,
   attemptedAt: ExecutionAttemptRecord["attemptedAt"],
-  reason: Exclude<NeedsHumanReason, "EXECUTION_UNCONFIRMED">,
+  reason: NeedsHumanReason,
 ): Promise<ExecuteActionNeedsHuman> {
   const blocked = markNeedsHuman(proposal, reason, attemptedAt);
   await repositories.proposals.replace(context, blocked, proposal.version);
@@ -343,6 +412,30 @@ function needsHumanResult(
   reason: NeedsHumanReason,
 ): ExecuteActionNeedsHuman {
   return Object.freeze({ status: "needs_human", proposal, reason });
+}
+
+type ExternalResultLookup =
+  | Readonly<{ status: "found"; result: ExecutionResult }>
+  | Readonly<{ status: "absent" }>
+  | Readonly<{ status: "unavailable" }>;
+
+async function lookupExternalResult(
+  connector: CommerceConnector,
+  idempotencyKey: string,
+  earliestCompletedAt: ExecutionAttemptRecord["attemptedAt"],
+): Promise<ExternalResultLookup> {
+  try {
+    const result = await connector.findActionResult(idempotencyKey);
+    if (result === null) {
+      return Object.freeze({ status: "absent" });
+    }
+    const snapshot = snapshotValidConnectorResult(result, idempotencyKey, earliestCompletedAt);
+    return snapshot === null
+      ? Object.freeze({ status: "unavailable" })
+      : Object.freeze({ status: "found", result: snapshot });
+  } catch {
+    return Object.freeze({ status: "unavailable" });
+  }
 }
 
 async function executeOrRecover(
