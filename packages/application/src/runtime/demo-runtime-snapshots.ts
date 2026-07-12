@@ -106,7 +106,7 @@ export function snapshotSuggestion(
       orderId: actionDraft.orderId,
       amount: snapshotMoney(actionDraft.amount),
       reasonCode: "damaged_item",
-      observedOrderVersion: requireNonBlank(actionDraft.observedOrderVersion),
+      observedOrderVersion: requirePositiveInteger(actionDraft.observedOrderVersion),
       observedOrderStatus: actionDraft.observedOrderStatus,
       observedRefundableAmount: snapshotMoney(actionDraft.observedRefundableAmount),
     }),
@@ -121,6 +121,8 @@ export function assertTrustedProposal(context: OperationContext, proposal: Actio
   }
   if (
     proposal.companyId !== context.companyId ||
+    !Number.isSafeInteger(proposal.version) ||
+    proposal.version < 1 ||
     !Object.isFrozen(proposal) ||
     !Object.isFrozen(proposal.payload) ||
     !ACTION_PROPOSAL_STATUSES.some((status) => status === proposal.status) ||
@@ -145,6 +147,8 @@ export function snapshotApprovalDecision(
   assertContext(context);
   if (
     decision.companyId !== context.companyId ||
+    !Number.isSafeInteger(decision.proposalVersion) ||
+    decision.proposalVersion < 1 ||
     decision.correlationId !== context.correlationId ||
     decision.causationId !== context.causationId ||
     (decision.decision !== "approved" && decision.decision !== "rejected")
@@ -152,16 +156,20 @@ export function snapshotApprovalDecision(
     throw new DemoRuntimeError("DEMO_RUNTIME_INVALID_RECORD");
   }
 
-  return Object.freeze({
+  const snapshot = {
     approvalDecisionId: requireNonBlank(decision.approvalDecisionId),
     companyId: decision.companyId,
     proposalId: decision.proposalId,
+    proposalVersion: decision.proposalVersion,
     decision: decision.decision,
     actor: snapshotActor(decision.actor),
     correlationId: requireNonBlank(decision.correlationId),
     causationId: requireNonBlank(decision.causationId),
     decidedAt: canonicalTimestamp(decision.decidedAt),
-  });
+  };
+  return decision.comment === undefined
+    ? Object.freeze(snapshot)
+    : Object.freeze({ ...snapshot, comment: requireNonBlank(decision.comment).trim() });
 }
 
 export function snapshotExecutionAttempt(

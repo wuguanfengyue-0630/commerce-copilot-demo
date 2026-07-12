@@ -233,7 +233,7 @@ describe("deterministic suggestion generator evidence gate", () => {
       orderId: "order-delivered-12800",
       amount: { amountMinor: 12_800, currency: "CNY" },
       reasonCode: "damaged_item",
-      observedOrderVersion: "1",
+      observedOrderVersion: 1,
       observedOrderStatus: "delivered",
       observedRefundableAmount: { amountMinor: 12_800, currency: "CNY" },
     });

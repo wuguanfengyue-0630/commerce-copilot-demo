@@ -31,6 +31,7 @@ export const actionProposalStatusSchema = z.enum(ACTION_PROPOSAL_STATUSES);
 
 export const actionProposalSchema = z.strictObject({
   proposalId: identifierSchema,
+  version: nonNegativeSafeIntegerSchema.min(1),
   companyId: identifierSchema,
   storeId: identifierSchema,
   conversationId: identifierSchema,

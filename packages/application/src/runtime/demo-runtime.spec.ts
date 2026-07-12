@@ -62,7 +62,7 @@ function refundProposal(suffix = "1") {
       orderId,
       amount: createMoney(12_800, "CNY"),
       reasonCode: "damaged_item",
-      observedOrderVersion: "1",
+      observedOrderVersion: 1,
       observedOrderStatus: "delivered",
       observedRefundableAmount: createMoney(12_800, "CNY"),
     },
@@ -114,6 +114,45 @@ async function seededSnapshot(runtime: ReturnType<typeof createDemoRuntime>) {
 }
 
 describe("demo runtime", () => {
+  it("preserves the seven-event workflow order when every timestamp is equal", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("equal-audit-time");
+    const occurredAt = toIsoTimestamp("2026-07-11T01:00:00.000Z");
+    const events = [
+      ["audit-z-01", "knowledge.retrieved"],
+      ["audit-y-02", "agent.suggestion_generated"],
+      ["audit-x-03", "action.proposed"],
+      ["audit-proposal-04-approval-approved", "approval.approved"],
+      ["audit-proposal-05-execution-started", "action.execution_started"],
+      ["audit-proposal-06-execution-succeeded", "action.execution_succeeded"],
+    ] as const;
+    for (const [auditEventId, eventType] of events) {
+      await runtime.repositories.auditEvents.append(
+        context,
+        createAuditEvent({
+          auditEventId: createAuditEventId(auditEventId),
+          companyId,
+          correlationId: context.correlationId,
+          causationId: context.causationId,
+          eventType,
+          occurredAt,
+        }),
+      );
+    }
+
+    expect(
+      (await runtime.repositories.auditEvents.list(context)).map((event) => event.eventType),
+    ).toEqual([
+      "conversation.message_ingested",
+      "knowledge.retrieved",
+      "agent.suggestion_generated",
+      "action.proposed",
+      "approval.approved",
+      "action.execution_started",
+      "action.execution_succeeded",
+    ]);
+  });
+
   it("seeds the stable conversation, published policy, and initial immutable audit event", async () => {
     const runtime = createDemoRuntime();
     const snapshot = await seededSnapshot(runtime);
@@ -165,6 +204,7 @@ describe("demo runtime", () => {
         approvalDecisionId: "approval-reset",
         companyId,
         proposalId: proposal.proposalId,
+        proposalVersion: 1,
         decision: "approved",
         actor: Object.freeze({
           userId: createUserId("supervisor-reset"),
@@ -259,6 +299,69 @@ describe("demo runtime", () => {
     ).not.toThrow();
   });
 
+  it("saves proposals create-only and replaces only the expected immutable successor", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("proposal-cas");
+    const pending = refundProposal("cas");
+    const actor = Object.freeze({
+      userId: createUserId("supervisor-cas"),
+      role: "supervisor" as const,
+    });
+    const approved = approveProposal(pending, actor, "2026-07-11T02:05:00.000Z");
+
+    await runtime.repositories.proposals.save(context, pending);
+    await expect(runtime.repositories.proposals.save(context, pending)).rejects.toMatchObject({
+      code: "DEMO_RUNTIME_CONFLICT",
+    });
+    await runtime.repositories.proposals.replace(context, approved, 1);
+    expect(await runtime.repositories.proposals.get(context, pending.proposalId)).toBe(approved);
+    await expect(
+      runtime.repositories.proposals.replace(context, approved, 1),
+    ).rejects.toMatchObject({
+      code: "DEMO_RUNTIME_CONFLICT",
+    });
+  });
+
+  it("rejects a transitioned proposal through the create-only save path", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("proposal-create-only");
+    const pending = refundProposal("create-only");
+    const approved = approveProposal(
+      pending,
+      Object.freeze({ userId: createUserId("supervisor-create-only"), role: "supervisor" }),
+      "2026-07-11T02:05:00.000Z",
+    );
+
+    await expect(runtime.repositories.proposals.save(context, approved)).rejects.toMatchObject({
+      code: "DEMO_RUNTIME_CONFLICT",
+    });
+    expect(await runtime.repositories.proposals.get(context, pending.proposalId)).toBeNull();
+  });
+
+  it("rejects a trusted same-id successor derived from different proposal payload", async () => {
+    const runtime = createDemoRuntime();
+    const context = operationContext("proposal-provenance");
+    const current = refundProposal("provenance");
+    const differentPending = createActionProposal({
+      ...current,
+      payload: { ...current.payload, amount: createMoney(6_400, "CNY") },
+    });
+    const differentApproved = approveProposal(
+      differentPending,
+      Object.freeze({
+        userId: createUserId("supervisor-provenance"),
+        role: "supervisor",
+      }),
+      "2026-07-11T02:05:00.000Z",
+    );
+
+    await runtime.repositories.proposals.save(context, current);
+    await expect(
+      runtime.repositories.proposals.replace(context, differentApproved, 1),
+    ).rejects.toMatchObject({ code: "DEMO_RUNTIME_CONFLICT" });
+    expect(await runtime.repositories.proposals.get(context, current.proposalId)).toBe(current);
+  });
+
   it("rejects deeply frozen spread and JSON proposal forgeries before storage", async () => {
     const runtime = createDemoRuntime();
     const context = operationContext("proposal-forgery");
@@ -334,7 +437,7 @@ describe("demo runtime", () => {
         orderId,
         amount: mutableAmount,
         reasonCode: "damaged_item" as const,
-        observedOrderVersion: "1",
+        observedOrderVersion: 1,
         observedOrderStatus: "delivered" as const,
         observedRefundableAmount: mutableAmount,
       },
@@ -410,12 +513,27 @@ describe("demo runtime", () => {
       ),
       captureRuntimeMutation(runtime.repositories.proposals.save(context, proposal)),
       captureRuntimeMutation(
+        runtime.repositories.proposals.replace(
+          context,
+          approveProposal(
+            proposal,
+            Object.freeze({
+              userId: createUserId("supervisor-root-replace"),
+              role: "supervisor",
+            }),
+            "2026-07-11T02:05:00.000Z",
+          ),
+          1,
+        ),
+      ),
+      captureRuntimeMutation(
         runtime.repositories.approvalDecisions.save(
           context,
           Object.freeze({
             approvalDecisionId: "approval-root-guard",
             companyId,
             proposalId: proposal.proposalId,
+            proposalVersion: 1,
             decision: "approved",
             actor: Object.freeze({
               userId: createUserId("supervisor-root-guard"),
@@ -477,7 +595,7 @@ describe("demo runtime", () => {
     await transaction;
 
     expect(mutationOutcomes).toEqual(
-      Array.from({ length: 6 }, () => "DEMO_RUNTIME_TRANSACTION_ACTIVE"),
+      Array.from({ length: 7 }, () => "DEMO_RUNTIME_TRANSACTION_ACTIVE"),
     );
     expect(
       await runtime.repositories.suggestions.get(

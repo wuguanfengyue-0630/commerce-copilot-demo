@@ -52,7 +52,7 @@ export function createDeterministicSuggestionGenerator(): SuggestionGenerator {
           orderId: order.orderId,
           amount,
           reasonCode: "damaged_item",
-          observedOrderVersion: String(order.version),
+          observedOrderVersion: order.version,
           observedOrderStatus: "delivered",
           observedRefundableAmount,
         }) satisfies Readonly<AfterSaleRefundPayload>;

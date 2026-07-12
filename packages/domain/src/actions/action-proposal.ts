@@ -1,3 +1,4 @@
+import type { OrderSnapshot } from "../orders/order-snapshot.ts";
 import { type IsoTimestamp, toIsoTimestamp } from "../shared/clock.ts";
 import type { CompanyId, ConversationId, ProposalId, StoreId, UserId } from "../shared/ids.ts";
 import { createMoney, type Money } from "../shared/money.ts";
@@ -12,7 +13,7 @@ export interface AfterSaleRefundPayload {
   orderId: string;
   amount: Money;
   reasonCode: "damaged_item";
-  observedOrderVersion: string;
+  observedOrderVersion: OrderSnapshot["version"];
   observedOrderStatus: "paid" | "shipped" | "delivered";
   observedRefundableAmount: Money;
 }
@@ -33,6 +34,7 @@ export type ActionExecutionResult = Readonly<{
 }>;
 
 type ActionProposalBase = Readonly<{
+  version: number;
   proposalId: ProposalId;
   companyId: CompanyId;
   storeId: StoreId;
@@ -80,9 +82,32 @@ export type ExecutedActionProposal = Readonly<
     }
 >;
 
+export type RejectedActionProposal = Readonly<
+  ActionProposalBase &
+    ProposalStateSeal<"rejected"> & {
+      status: "rejected";
+      rejection: Readonly<{
+        rejectedBy: ApprovalActor;
+        rejectedAt: IsoTimestamp;
+      }>;
+    }
+>;
+
+export type NeedsHumanActionProposal = Readonly<
+  ActionProposalBase &
+    ProposalStateSeal<"needs_human"> & {
+      status: "needs_human";
+      approval: ActionApproval;
+      needsHuman: Readonly<{
+        reason: string;
+        markedAt: IsoTimestamp;
+      }>;
+    }
+>;
+
 type ClosedActionProposalStatus = Exclude<
   ActionProposalStatus,
-  "pending_approval" | "approved" | "executing" | "executed"
+  "pending_approval" | "approved" | "rejected" | "executing" | "executed" | "needs_human"
 >;
 
 export type ClosedActionProposal = {
@@ -99,6 +124,8 @@ export type ActionProposal =
   | ApprovedActionProposal
   | ExecutingActionProposal
   | ExecutedActionProposal
+  | RejectedActionProposal
+  | NeedsHumanActionProposal
   | ClosedActionProposal;
 
 export type ActionProposalInput = Readonly<{
@@ -157,6 +184,7 @@ export function createActionProposal(input: ActionProposalInput): PendingActionP
       storeId: input.storeId,
       conversationId: input.conversationId,
       payload,
+      version: 1,
       status: "pending_approval",
       createdAt,
       expiresAt,
@@ -203,10 +231,39 @@ export function approveProposal(
   return sealProposal(
     {
       ...proposalBase(proposal),
+      version: proposal.version + 1,
       status: "approved",
       approval,
     },
     "approved",
+  );
+}
+
+export function rejectProposal(
+  proposal: ActionProposal,
+  reviewer: ApprovalActor,
+  rejectedAt: Date | string,
+): RejectedActionProposal {
+  assertIssuedActionProposal(proposal);
+  if (proposal.status !== "pending_approval") {
+    throw new ActionTransitionError("ACTION_NOT_PENDING_APPROVAL");
+  }
+  assertValidApprover(reviewer);
+  const normalizedRejectedAt = normalizeTimestamp(rejectedAt);
+  if (normalizedRejectedAt < proposal.createdAt) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
+  assertNotExpired(proposal, normalizedRejectedAt);
+  const rejectedBy = Object.freeze({ userId: reviewer.userId, role: reviewer.role });
+  const rejection = Object.freeze({ rejectedBy, rejectedAt: normalizedRejectedAt });
+  return sealProposal(
+    {
+      ...proposalBase(proposal),
+      version: proposal.version + 1,
+      status: "rejected",
+      rejection,
+    },
+    "rejected",
   );
 }
 
@@ -233,6 +290,7 @@ export function markExecuting(
   return sealProposal(
     {
       ...proposalBase(proposal),
+      version: proposal.version + 1,
       status: "executing",
       approval: proposal.approval,
       executionStartedAt: normalizedExecutionStartedAt,
@@ -264,6 +322,7 @@ export function markExecuted(
   return sealProposal(
     {
       ...proposalBase(proposal),
+      version: proposal.version + 1,
       status: "executed",
       approval: proposal.approval,
       executionStartedAt: proposal.executionStartedAt,
@@ -273,8 +332,38 @@ export function markExecuted(
   );
 }
 
+export function markNeedsHuman(
+  proposal: ActionProposal,
+  reason: string,
+  markedAt: Date | string,
+): NeedsHumanActionProposal {
+  assertIssuedActionProposal(proposal);
+  if (proposal.status !== "approved" && proposal.status !== "executing") {
+    throw new ActionTransitionError(
+      proposal.status === "pending_approval" ? "ACTION_NOT_APPROVED" : "ACTION_NOT_EXECUTING",
+    );
+  }
+  const normalizedMarkedAt = normalizeTimestamp(markedAt);
+  const earliest =
+    proposal.status === "executing" ? proposal.executionStartedAt : proposal.approval.approvedAt;
+  if (typeof reason !== "string" || reason.trim().length === 0 || normalizedMarkedAt < earliest) {
+    throw new ActionTransitionError("ACTION_INVALID_PROPOSAL");
+  }
+  return sealProposal(
+    {
+      ...proposalBase(proposal),
+      version: proposal.version + 1,
+      status: "needs_human",
+      approval: proposal.approval,
+      needsHuman: Object.freeze({ reason: reason.trim(), markedAt: normalizedMarkedAt }),
+    },
+    "needs_human",
+  );
+}
+
 function proposalBase(proposal: ActionProposal): ActionProposalBase {
   return {
+    version: proposal.version,
     proposalId: proposal.proposalId,
     companyId: proposal.companyId,
     storeId: proposal.storeId,
@@ -301,6 +390,8 @@ export function assertIssuedActionProposal(proposal: ActionProposal): void {
 
   if (
     !Object.isFrozen(proposal) ||
+    !Number.isSafeInteger(proposal.version) ||
+    proposal.version < 1 ||
     !hasCanonicalStatus ||
     issuedStatus === undefined ||
     issuedStatus !== proposal.status

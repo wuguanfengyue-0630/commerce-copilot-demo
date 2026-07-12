@@ -3,13 +3,18 @@ import type {
   ExecuteActionCommand,
   GetOrderCommand,
 } from "@commerce-copilot/application";
+import { createDemoRuntime, createExecuteActionUseCase } from "@commerce-copilot/application";
 import {
+  approveProposal,
+  createActionProposal,
   createCompanyId,
   createMoney,
   createOrderId,
   createOrderSnapshot,
   createProposalId,
   createStoreId,
+  createUserId,
+  FixedClock,
   type OrderSnapshot,
   toIsoTimestamp,
 } from "@commerce-copilot/domain";
@@ -20,6 +25,7 @@ import {
   type MockCommerceConnectorErrorCode,
 } from "./mock-commerce-connector.ts";
 import {
+  mockCompanyId,
   mockDamagedItemConversation,
   mockDamagedItemRefundPolicy,
   mockDeliveredOrder,
@@ -117,6 +123,136 @@ describe("mock commerce connector", () => {
     expect(first).toEqual(second);
     expect(second).toBe(first);
     expect(connector.executionCount("refund:proposal-1")).toBe(1);
+  });
+
+  it.each([
+    {
+      drift: "version",
+      order: createOrderSnapshot({
+        ...mockDeliveredOrder,
+        version: 2,
+        updatedAt: toIsoTimestamp("2026-07-11T01:01:00.000Z"),
+      }),
+    },
+    {
+      drift: "status",
+      order: createOrderSnapshot({
+        ...mockDeliveredOrder,
+        status: "refunded",
+        updatedAt: toIsoTimestamp("2026-07-11T01:01:00.000Z"),
+      }),
+    },
+    {
+      drift: "refundable amount",
+      order: createOrderSnapshot({
+        ...mockDeliveredOrder,
+        refundable: createMoney(6_400, "CNY"),
+        updatedAt: toIsoTimestamp("2026-07-11T01:01:00.000Z"),
+      }),
+    },
+  ])("blocks $drift at the adapter precondition gate before an effect", async ({ order }) => {
+    const connector = createMockCommerceConnector();
+    const command = refundExecutionCommand({
+      idempotencyKey: `refund:precondition-${order.status}-${order.version}`,
+    });
+    connector.setOrder(order);
+
+    await expectConnectorError(connector.executeAction(command), "MOCK_PRECONDITION_FAILED");
+
+    expect(connector.executionCount(command.idempotencyKey)).toBe(0);
+  });
+
+  it("rejects a requested refund above the observed refundable amount", async () => {
+    const connector = createMockCommerceConnector();
+    const original = refundExecutionCommand({ idempotencyKey: "refund:requested-too-high" });
+    const command = refundExecutionCommand({
+      idempotencyKey: original.idempotencyKey,
+      payload: {
+        ...original.payload,
+        amount: createMoney(12_801, "CNY"),
+      },
+    });
+
+    await expectConnectorError(connector.executeAction(command), "MOCK_PRECONDITION_FAILED");
+    expect(connector.executionCount(command.idempotencyKey)).toBe(0);
+  });
+
+  it("returns a completed identical idempotency key before checking later order drift", async () => {
+    const connector = createMockCommerceConnector();
+    const command = refundExecutionCommand({ idempotencyKey: "refund:completed-before-drift" });
+    const completed = await connector.executeAction(command);
+    connector.setOrder(
+      createOrderSnapshot({
+        ...mockDeliveredOrder,
+        version: 2,
+        updatedAt: toIsoTimestamp("2026-07-11T01:01:00.000Z"),
+      }),
+    );
+
+    expect(await connector.executeAction(command)).toBe(completed);
+    expect(connector.executionCount(command.idempotencyKey)).toBe(1);
+  });
+
+  it("blocks an order change after application getOrder but before the adapter effect", async () => {
+    const runtime = createDemoRuntime();
+    const connector = createMockCommerceConnector();
+    const raceProposalId = createProposalId("proposal-adapter-race");
+    const proposal = createActionProposal({
+      proposalId: raceProposalId,
+      companyId: mockCompanyId,
+      storeId: mockStoreId,
+      conversationId: mockDamagedItemConversation.conversationId,
+      payload: refundExecutionCommand().payload,
+      createdAt: "2026-07-11T01:05:00.000Z",
+      expiresAt: "2026-07-11T01:30:00.000Z",
+    });
+    const approved = approveProposal(
+      proposal,
+      Object.freeze({ userId: createUserId("supervisor-race"), role: "supervisor" }),
+      "2026-07-11T01:10:00.000Z",
+    );
+    const context = Object.freeze({
+      companyId: mockCompanyId,
+      correlationId: "correlation-adapter-race",
+      causationId: "causation-adapter-race",
+    });
+    await runtime.repositories.proposals.save(context, proposal);
+    await runtime.unitOfWork.run(context, (repositories) =>
+      repositories.proposals.replace(context, approved, proposal.version),
+    );
+    const racingConnector: CommerceConnector = Object.freeze({
+      getCapabilities: connector.getCapabilities,
+      async getOrder(command: GetOrderCommand) {
+        const observed = await connector.getOrder(command);
+        connector.setOrder(
+          createOrderSnapshot({
+            ...mockDeliveredOrder,
+            version: 2,
+            updatedAt: toIsoTimestamp("2026-07-11T01:11:00.000Z"),
+          }),
+        );
+        return observed;
+      },
+      executeAction: connector.executeAction,
+      findActionResult: connector.findActionResult,
+    });
+    const useCase = createExecuteActionUseCase({
+      repositories: runtime.repositories,
+      unitOfWork: runtime.unitOfWork,
+      commerceConnector: racingConnector,
+      clock: new FixedClock(new Date("2026-07-11T01:11:00.000Z")),
+    });
+
+    const result = await useCase.execute({
+      companyId: mockCompanyId,
+      proposalId: raceProposalId,
+      actor: { id: "supervisor-race", role: "supervisor" },
+      correlationId: context.correlationId,
+      causationId: context.causationId,
+    });
+
+    expect(result).toMatchObject({ status: "needs_human", reason: "EXECUTION_UNCONFIRMED" });
+    expect(connector.executionCount(`refund:${raceProposalId}`)).toBe(0);
   });
 
   it("coalesces concurrent executions for the same idempotency key", async () => {

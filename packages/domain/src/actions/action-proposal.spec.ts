@@ -23,7 +23,9 @@ import {
   type ExecutingActionProposal,
   markExecuted,
   markExecuting,
+  markNeedsHuman,
   type PendingActionProposal,
+  rejectProposal,
 } from "./action-proposal.ts";
 
 const fixedNow = "2026-07-11T01:00:00.000Z";
@@ -44,7 +46,7 @@ function refundProposal(overrides: Partial<ActionProposalInput> = {}): PendingAc
       orderId: "order-1",
       amount: createMoney(12_800, "CNY"),
       reasonCode: "damaged_item",
-      observedOrderVersion: "order-version-3",
+      observedOrderVersion: 3,
       observedOrderStatus: "delivered",
       observedRefundableAmount: createMoney(12_800, "CNY"),
     },
@@ -124,6 +126,7 @@ describe("action proposal state machine", () => {
     const proposal = refundProposal();
 
     expect(proposal.status).toBe("pending_approval");
+    expect(proposal.version).toBe(1);
     expect(Object.isFrozen(proposal)).toBe(true);
     expect(Object.isFrozen(proposal.payload)).toBe(true);
   });
@@ -134,7 +137,7 @@ describe("action proposal state machine", () => {
       orderId: "order-2",
       amount: createMoney(6_400, "CNY"),
       reasonCode: "damaged_item" as const,
-      observedOrderVersion: "order-version-4",
+      observedOrderVersion: 4,
       observedOrderStatus: "shipped" as const,
       observedRefundableAmount: createMoney(6_400, "CNY"),
       connectorSecret: "must-not-cross-domain-boundary",
@@ -147,7 +150,7 @@ describe("action proposal state machine", () => {
       orderId: "order-2",
       amount: createMoney(6_400, "CNY"),
       reasonCode: "damaged_item",
-      observedOrderVersion: "order-version-4",
+      observedOrderVersion: 4,
       observedOrderStatus: "shipped",
       observedRefundableAmount: createMoney(6_400, "CNY"),
     });
@@ -259,9 +262,11 @@ describe("action proposal state machine", () => {
     const approved = approveProposal(proposal, supervisor, fixedNow);
 
     expect(proposal.status).toBe("pending_approval");
+    expect(proposal.version).toBe(1);
     expect(approved).not.toBe(proposal);
     expect(approved).toMatchObject({
       status: "approved",
+      version: 2,
       approval: {
         approvedBy: supervisor,
         approvedAt: fixedNow,
@@ -375,8 +380,10 @@ describe("action proposal state machine", () => {
     const executing = markExecuting(approved, "2026-07-11T01:00:01.000Z");
 
     expect(approved.status).toBe("approved");
+    expect(approved.version).toBe(2);
     expect(executing).toMatchObject({
       status: "executing",
+      version: 3,
       executionStartedAt: "2026-07-11T01:00:01.000Z",
     });
     expect(Object.isFrozen(executing)).toBe(true);
@@ -407,6 +414,7 @@ describe("action proposal state machine", () => {
 
     expect(executed).toMatchObject({
       status: "executed",
+      version: 4,
       executionResult: executionResult(),
     });
     expect(Object.isFrozen(executed.executionResult)).toBe(true);
@@ -454,7 +462,42 @@ describe("action proposal state machine", () => {
     const repeated = markExecuted(executed, differentResult);
 
     expect(repeated).toBe(executed);
+    expect(repeated.version).toBe(4);
     expect(repeated.executionResult).toEqual(executionResult());
+  });
+
+  it("rejects a pending proposal with immutable reviewer evidence", () => {
+    const pending = refundProposal();
+
+    const rejected = rejectProposal(pending, supervisor, fixedNow);
+
+    expect(pending).toMatchObject({ status: "pending_approval", version: 1 });
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      version: 2,
+      rejection: { rejectedBy: supervisor, rejectedAt: fixedNow },
+    });
+    expect(Object.isFrozen(rejected.rejection)).toBe(true);
+  });
+
+  it("marks approved and executing proposals needs-human without mutating predecessors", () => {
+    const approved = approveProposal(refundProposal(), supervisor, fixedNow);
+    const blockedApproved = markNeedsHuman(approved, "ORDER_CHANGED", fixedNow);
+    const executing = markExecuting(approved, fixedNow);
+    const blockedExecuting = markNeedsHuman(executing, "EXECUTION_UNCONFIRMED", fixedNow);
+
+    expect(approved).toMatchObject({ status: "approved", version: 2 });
+    expect(blockedApproved).toMatchObject({
+      status: "needs_human",
+      version: 3,
+      needsHuman: { reason: "ORDER_CHANGED", markedAt: fixedNow },
+    });
+    expect(executing).toMatchObject({ status: "executing", version: 3 });
+    expect(blockedExecuting).toMatchObject({
+      status: "needs_human",
+      version: 4,
+      needsHuman: { reason: "EXECUTION_UNCONFIRMED", markedAt: fixedNow },
+    });
   });
 
   it("returns stable typed errors for illegal completion and repeated approval", () => {

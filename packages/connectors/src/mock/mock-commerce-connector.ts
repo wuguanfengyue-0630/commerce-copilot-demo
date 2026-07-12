@@ -6,8 +6,10 @@ import type {
 } from "@commerce-copilot/application";
 import {
   type CapabilityState,
+  type Clock,
   createMoney,
   createOrderSnapshot,
+  FixedClock,
   ORDER_STATUSES,
   type OrderSnapshot,
   type StoreId,
@@ -21,6 +23,7 @@ export const MOCK_COMMERCE_CONNECTOR_ERROR_CODES = [
   "MOCK_INVALID_COMMAND",
   "MOCK_INVALID_ORDER",
   "MOCK_IDEMPOTENCY_CONFLICT",
+  "MOCK_PRECONDITION_FAILED",
 ] as const;
 
 export type MockCommerceConnectorErrorCode = (typeof MOCK_COMMERCE_CONNECTOR_ERROR_CODES)[number];
@@ -62,9 +65,9 @@ const capabilityFixtures = [
   },
 ] as const satisfies readonly CapabilityState[];
 
-const mockCompletionTime = toIsoTimestamp("2026-07-11T02:00:00.000Z");
-
-export function createMockCommerceConnector(): MockCommerceConnector {
+export function createMockCommerceConnector(
+  clock: Clock = new FixedClock(new Date("2026-07-11T02:00:00.000Z")),
+): MockCommerceConnector {
   let currentOrder = snapshotOrder(mockDeliveredOrder);
   let nextExecutionNumber = 1;
   const executions = new Map<string, ExecutionRecord>();
@@ -105,14 +108,18 @@ export function createMockCommerceConnector(): MockCommerceConnector {
       ) {
         throw new MockCommerceConnectorError("MOCK_ORDER_NOT_FOUND");
       }
+      if (!matchesCurrentOrder(commandSnapshot, currentOrder)) {
+        throw new MockCommerceConnectorError("MOCK_PRECONDITION_FAILED");
+      }
 
       const executionNumber = String(nextExecutionNumber).padStart(4, "0");
+      const completedAt = toIsoTimestamp(clock.now());
       const result: ExecutionResult = Object.freeze({
         status: "succeeded",
         executionId: `mock-execution-${executionNumber}`,
         idempotencyKey: commandSnapshot.idempotencyKey,
         externalReference: `mock-refund-${executionNumber}`,
-        completedAt: mockCompletionTime,
+        completedAt,
       });
       const record: ExecutionRecord = Object.freeze({ command: commandSnapshot, result });
       executions.set(commandSnapshot.idempotencyKey, record);
@@ -203,7 +210,8 @@ function snapshotCommand(command: ExecuteActionCommand): ExecuteActionCommand {
       payload.kind !== "after_sale.refund" ||
       !isNonBlank(payload.orderId) ||
       payload.reasonCode !== "damaged_item" ||
-      !isNonBlank(payload.observedOrderVersion) ||
+      !Number.isSafeInteger(payload.observedOrderVersion) ||
+      payload.observedOrderVersion < 1 ||
       !isObservedOrderStatus(payload.observedOrderStatus)
     ) {
       throw new Error("invalid command");
@@ -254,5 +262,19 @@ function isSameAction(first: ExecuteActionCommand, second: ExecuteActionCommand)
       second.payload.observedRefundableAmount.amountMinor &&
     first.payload.observedRefundableAmount.currency ===
       second.payload.observedRefundableAmount.currency
+  );
+}
+
+function matchesCurrentOrder(command: ExecuteActionCommand, order: OrderSnapshot): boolean {
+  return (
+    order.companyId === mockCompanyId &&
+    order.storeId === command.storeId &&
+    order.orderId === command.payload.orderId &&
+    order.version === command.payload.observedOrderVersion &&
+    order.status === command.payload.observedOrderStatus &&
+    order.refundable.amountMinor === command.payload.observedRefundableAmount.amountMinor &&
+    order.refundable.currency === command.payload.observedRefundableAmount.currency &&
+    command.payload.amount.amountMinor <= order.refundable.amountMinor &&
+    command.payload.amount.currency === order.refundable.currency
   );
 }

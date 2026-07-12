@@ -33,6 +33,8 @@ const supervisor = Object.freeze({ id: "supervisor-demo", role: "supervisor" as 
 const approvalCommand = Object.freeze({
   companyId,
   proposalId,
+  proposalVersion: 1,
+  outcome: "approved",
   actor: supervisor,
   correlationId: "demo-approval-1",
   causationId: proposalId,
@@ -70,7 +72,7 @@ function pendingProposal() {
       orderId,
       amount: createMoney(12_800, "CNY"),
       reasonCode: "damaged_item",
-      observedOrderVersion: "1",
+      observedOrderVersion: 1,
       observedOrderStatus: "delivered",
       observedRefundableAmount: createMoney(12_800, "CNY"),
     },

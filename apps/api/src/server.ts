@@ -109,6 +109,8 @@ export function createDemoServer() {
             await composition.decideApproval.execute({
               companyId: mockCompanyId,
               proposalId,
+              proposalVersion: state.proposal.version,
+              outcome: "approved",
               actor: { id: "supervisor-demo", role: "supervisor" },
               correlationId: "demo-approval-1",
               causationId: proposalId,

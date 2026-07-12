@@ -9,6 +9,8 @@ import {
   type ExecutingActionProposal,
   markExecuted,
   markExecuting,
+  markNeedsHuman,
+  type NeedsHumanActionProposal,
   type OrderSnapshot,
   toIsoTimestamp,
 } from "@commerce-copilot/domain";
@@ -56,10 +58,17 @@ export type ExecuteActionSucceeded = Readonly<{
   executionResult: ExecutionResultRecord;
 }>;
 
+export type NeedsHumanReason =
+  | "ORDER_CHANGED"
+  | "ORDER_UNAVAILABLE"
+  | "POLICY_CHANGED"
+  | "PROPOSAL_EXPIRED"
+  | "EXECUTION_UNCONFIRMED";
+
 export type ExecuteActionNeedsHuman = Readonly<{
   status: "needs_human";
-  proposal: ApprovedActionProposal | ExecutingActionProposal;
-  reason: "ORDER_CHANGED" | "ORDER_UNAVAILABLE" | "EXECUTION_UNCONFIRMED";
+  proposal: NeedsHumanActionProposal;
+  reason: NeedsHumanReason;
 }>;
 
 export type ExecuteApprovedActionResult = ExecuteActionSucceeded | ExecuteActionNeedsHuman;
@@ -84,31 +93,50 @@ export function createExecuteActionUseCase(
       if (command.actor.role !== "supervisor" && command.actor.role !== "admin") {
         throw new ExecuteActionError("EXECUTION_ROLE_REQUIRED");
       }
-
       const context = operationContext(command);
+
       try {
         return await dependencies.unitOfWork.run(context, async (repositories) => {
           const proposal = await repositories.proposals.get(context, command.proposalId);
           if (proposal === null) {
             throw new ExecuteActionError("EXECUTION_NOT_FOUND");
           }
-
           const idempotencyKey = `refund:${proposal.proposalId}`;
           if (proposal.status === "executed") {
             return loadExecutedResult(repositories, context, proposal, idempotencyKey);
           }
-          if (proposal.status === "executing") {
-            return Object.freeze({
-              status: "needs_human",
+          if (proposal.status === "needs_human") {
+            return needsHumanResult(
               proposal,
-              reason: "EXECUTION_UNCONFIRMED",
-            });
+              normalizeNeedsHumanReason(proposal.needsHuman.reason),
+            );
           }
           if (proposal.status !== "approved") {
             throw new ExecuteActionError("EXECUTION_CONFLICT");
           }
 
           const evaluatedAt = toIsoTimestamp(dependencies.clock.now());
+          if (evaluatedAt >= proposal.expiresAt) {
+            return persistBlocked(
+              repositories,
+              context,
+              proposal,
+              idempotencyKey,
+              evaluatedAt,
+              "PROPOSAL_EXPIRED",
+            );
+          }
+          if (!(await hasEnabledRefundPolicy(repositories, context, proposal, evaluatedAt))) {
+            return persistBlocked(
+              repositories,
+              context,
+              proposal,
+              idempotencyKey,
+              evaluatedAt,
+              "POLICY_CHANGED",
+            );
+          }
+
           let liveOrder: OrderSnapshot;
           try {
             liveOrder = await dependencies.commerceConnector.getOrder({
@@ -125,7 +153,6 @@ export function createExecuteActionUseCase(
               "ORDER_UNAVAILABLE",
             );
           }
-
           if (!matchesObservedOrder(proposal, liveOrder)) {
             return persistBlocked(
               repositories,
@@ -137,13 +164,8 @@ export function createExecuteActionUseCase(
             );
           }
 
-          let executing: ExecutingActionProposal;
-          try {
-            executing = markExecuting(proposal, evaluatedAt);
-          } catch {
-            throw new ExecuteActionError("EXECUTION_CONFLICT");
-          }
-          await repositories.proposals.save(context, executing);
+          const executing = markExecuting(proposal, evaluatedAt);
+          await repositories.proposals.replace(context, executing, proposal.version);
           await repositories.executionAttempts.save(
             context,
             executionAttempt(proposal, context, idempotencyKey, "started", evaluatedAt),
@@ -163,34 +185,16 @@ export function createExecuteActionUseCase(
             dependencies.commerceConnector,
             proposal,
             idempotencyKey,
+            evaluatedAt,
           );
           if (connectorResult === null) {
-            await repositories.executionAttempts.save(
+            return persistUnconfirmed(
+              repositories,
               context,
-              executionAttempt(
-                proposal,
-                context,
-                idempotencyKey,
-                "blocked",
-                evaluatedAt,
-                "EXECUTION_UNCONFIRMED",
-              ),
+              executing,
+              idempotencyKey,
+              evaluatedAt,
             );
-            await repositories.auditEvents.append(
-              context,
-              executionAudit(
-                proposal,
-                context,
-                "06-execution-blocked",
-                "action.execution_blocked",
-                evaluatedAt,
-              ),
-            );
-            return Object.freeze({
-              status: "needs_human",
-              proposal: executing,
-              reason: "EXECUTION_UNCONFIRMED",
-            });
           }
 
           const executed = markExecuted(executing, {
@@ -198,7 +202,7 @@ export function createExecuteActionUseCase(
             executedAt: connectorResult.completedAt,
           });
           const storedResult = executionResult(proposal, context, connectorResult);
-          await repositories.proposals.save(context, executed);
+          await repositories.proposals.replace(context, executed, executing.version);
           await repositories.executionResults.save(context, storedResult);
           await repositories.executionAttempts.save(
             context,
@@ -220,7 +224,6 @@ export function createExecuteActionUseCase(
               connectorResult.completedAt,
             ),
           );
-
           return Object.freeze({
             status: "succeeded",
             proposal: executed,
@@ -237,6 +240,28 @@ export function createExecuteActionUseCase(
   });
 }
 
+async function hasEnabledRefundPolicy(
+  repositories: ApplicationRepositories,
+  context: OperationContext,
+  proposal: ApprovedActionProposal,
+  evaluatedAt: ExecutionAttemptRecord["attemptedAt"],
+): Promise<boolean> {
+  try {
+    const evidence = await repositories.publishedKnowledge.search({
+      ...context,
+      storeId: proposal.storeId,
+      conversationId: proposal.conversationId,
+      query: "damaged_item",
+      evaluatedAt,
+    });
+    return evidence.some(
+      (record) => record.refundRule.kind === proposal.payload.kind && record.refundRule.enabled,
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function loadExecutedResult(
   repositories: ApplicationRepositories,
   context: OperationContext,
@@ -250,11 +275,7 @@ async function loadExecutedResult(
   if (storedResult === null || storedResult.proposalId !== proposal.proposalId) {
     throw new ExecuteActionError("EXECUTION_PERSIST_FAILED");
   }
-  return Object.freeze({
-    status: "succeeded",
-    proposal,
-    executionResult: storedResult,
-  });
+  return Object.freeze({ status: "succeeded", proposal, executionResult: storedResult });
 }
 
 async function persistBlocked(
@@ -263,8 +284,10 @@ async function persistBlocked(
   proposal: ApprovedActionProposal,
   idempotencyKey: string,
   attemptedAt: ExecutionAttemptRecord["attemptedAt"],
-  reason: ExecuteActionNeedsHuman["reason"],
+  reason: Exclude<NeedsHumanReason, "EXECUTION_UNCONFIRMED">,
 ): Promise<ExecuteActionNeedsHuman> {
+  const blocked = markNeedsHuman(proposal, reason, attemptedAt);
+  await repositories.proposals.replace(context, blocked, proposal.version);
   await repositories.executionAttempts.save(
     context,
     executionAttempt(proposal, context, idempotencyKey, "blocked", attemptedAt, reason),
@@ -274,11 +297,51 @@ async function persistBlocked(
     executionAudit(
       proposal,
       context,
-      "05-execution-blocked",
+      "06-execution-blocked",
       "action.execution_blocked",
       attemptedAt,
     ),
   );
+  return needsHumanResult(blocked, reason);
+}
+
+async function persistUnconfirmed(
+  repositories: ApplicationRepositories,
+  context: OperationContext,
+  executing: ExecutingActionProposal,
+  idempotencyKey: string,
+  attemptedAt: ExecutionAttemptRecord["attemptedAt"],
+): Promise<ExecuteActionNeedsHuman> {
+  const blocked = markNeedsHuman(executing, "EXECUTION_UNCONFIRMED", attemptedAt);
+  await repositories.proposals.replace(context, blocked, executing.version);
+  await repositories.executionAttempts.save(
+    context,
+    executionAttempt(
+      executing,
+      context,
+      idempotencyKey,
+      "blocked",
+      attemptedAt,
+      "EXECUTION_UNCONFIRMED",
+    ),
+  );
+  await repositories.auditEvents.append(
+    context,
+    executionAudit(
+      executing,
+      context,
+      "06-execution-blocked",
+      "action.execution_blocked",
+      attemptedAt,
+    ),
+  );
+  return needsHumanResult(blocked, "EXECUTION_UNCONFIRMED");
+}
+
+function needsHumanResult(
+  proposal: NeedsHumanActionProposal,
+  reason: NeedsHumanReason,
+): ExecuteActionNeedsHuman {
   return Object.freeze({ status: "needs_human", proposal, reason });
 }
 
@@ -286,9 +349,11 @@ async function executeOrRecover(
   connector: CommerceConnector,
   proposal: ApprovedActionProposal,
   idempotencyKey: string,
+  executionStartedAt: ExecutionAttemptRecord["attemptedAt"],
 ): Promise<ExecutionResult | null> {
+  let result: ExecutionResult | null;
   try {
-    return await connector.executeAction({
+    result = await connector.executeAction({
       storeId: proposal.storeId,
       proposalId: proposal.proposalId,
       payload: proposal.payload,
@@ -296,10 +361,42 @@ async function executeOrRecover(
     });
   } catch {
     try {
-      return await connector.findActionResult(idempotencyKey);
+      result = await connector.findActionResult(idempotencyKey);
     } catch {
       return null;
     }
+  }
+  return snapshotValidConnectorResult(result, idempotencyKey, executionStartedAt);
+}
+
+function snapshotValidConnectorResult(
+  result: ExecutionResult | null,
+  idempotencyKey: string,
+  executionStartedAt: ExecutionAttemptRecord["attemptedAt"],
+): ExecutionResult | null {
+  if (
+    result === null ||
+    result.status !== "succeeded" ||
+    result.idempotencyKey !== idempotencyKey ||
+    !isNonBlank(result.executionId) ||
+    !isNonBlank(result.externalReference)
+  ) {
+    return null;
+  }
+  try {
+    const completedAt = toIsoTimestamp(result.completedAt);
+    if (completedAt !== result.completedAt || completedAt < executionStartedAt) {
+      return null;
+    }
+    return Object.freeze({
+      status: "succeeded",
+      executionId: result.executionId,
+      idempotencyKey,
+      externalReference: result.externalReference,
+      completedAt,
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -308,7 +405,7 @@ function matchesObservedOrder(proposal: ApprovedActionProposal, order: OrderSnap
     order.companyId === proposal.companyId &&
     order.storeId === proposal.storeId &&
     order.orderId === proposal.payload.orderId &&
-    String(order.version) === proposal.payload.observedOrderVersion &&
+    order.version === proposal.payload.observedOrderVersion &&
     order.status === proposal.payload.observedOrderStatus &&
     order.refundable.amountMinor === proposal.payload.observedRefundableAmount.amountMinor &&
     order.refundable.currency === proposal.payload.observedRefundableAmount.currency &&
@@ -394,6 +491,18 @@ function operationContext(command: ExecuteApprovedActionCommand): OperationConte
     correlationId: command.correlationId,
     causationId: command.causationId,
   });
+}
+
+function normalizeNeedsHumanReason(reason: string): NeedsHumanReason {
+  return [
+    "ORDER_CHANGED",
+    "ORDER_UNAVAILABLE",
+    "POLICY_CHANGED",
+    "PROPOSAL_EXPIRED",
+    "EXECUTION_UNCONFIRMED",
+  ].some((candidate) => candidate === reason)
+    ? (reason as NeedsHumanReason)
+    : "EXECUTION_UNCONFIRMED";
 }
 
 function isRole(role: ApprovalCommandActor["role"]): boolean {

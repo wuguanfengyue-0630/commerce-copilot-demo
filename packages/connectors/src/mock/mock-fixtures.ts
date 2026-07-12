@@ -111,7 +111,7 @@ const mockRefundPayload = Object.freeze({
   orderId: mockOrderId,
   amount: createMoney(12_800, "CNY"),
   reasonCode: "damaged_item",
-  observedOrderVersion: String(mockDeliveredOrder.version),
+  observedOrderVersion: mockDeliveredOrder.version,
   observedOrderStatus: "delivered",
   observedRefundableAmount: createMoney(12_800, "CNY"),
 }) satisfies Readonly<AfterSaleRefundPayload>;

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { IsoTimestamp } from "@commerce-copilot/domain";
+import type { AuditEvent, AuditEventType, IsoTimestamp } from "@commerce-copilot/domain";
 import type {
   ApplicationRepositories,
   ApplicationUnitOfWork,
@@ -195,7 +195,29 @@ function createRepositories(
         assertMutationAllowed();
         assertContext(context);
         assertTrustedProposal(context, proposal);
-        readState().proposals.set(proposal.proposalId, proposal);
+        const proposals = readState().proposals;
+        if (proposal.version !== 1 || proposals.has(proposal.proposalId)) {
+          throw new DemoRuntimeError("DEMO_RUNTIME_CONFLICT");
+        }
+        proposals.set(proposal.proposalId, proposal);
+      },
+
+      async replace(context, next, expectedVersion) {
+        assertMutationAllowed();
+        assertContext(context);
+        assertTrustedProposal(context, next);
+        const proposals = readState().proposals;
+        const current = proposals.get(next.proposalId);
+        if (
+          current === undefined ||
+          current.companyId !== context.companyId ||
+          current.version !== expectedVersion ||
+          next.version !== expectedVersion + 1 ||
+          !sameProposalIdentityAndPayload(current, next)
+        ) {
+          throw new DemoRuntimeError("DEMO_RUNTIME_CONFLICT");
+        }
+        proposals.set(next.proposalId, next);
       },
 
       async get(context, proposalId) {
@@ -333,14 +355,7 @@ function createRepositories(
         const events = [...readState().auditEvents.values()].filter(
           (event) => event.companyId === context.companyId,
         );
-        return frozenSorted(events, (left, right) =>
-          compareTimestampAndId(
-            left.occurredAt,
-            left.auditEventId,
-            right.occurredAt,
-            right.auditEventId,
-          ),
-        );
+        return frozenSorted(events, compareAuditEvents);
       },
     } satisfies AuditEventRepository),
   };
@@ -363,4 +378,59 @@ function compareTimestampAndId(
 ): number {
   const timestampOrder = leftTimestamp.localeCompare(rightTimestamp);
   return timestampOrder === 0 ? leftId.localeCompare(rightId) : timestampOrder;
+}
+
+function compareAuditEvents(left: AuditEvent, right: AuditEvent): number {
+  const timestampOrder = left.occurredAt.localeCompare(right.occurredAt);
+  if (timestampOrder !== 0) {
+    return timestampOrder;
+  }
+  const stageOrder = auditStage(left.eventType) - auditStage(right.eventType);
+  return stageOrder === 0 ? left.auditEventId.localeCompare(right.auditEventId) : stageOrder;
+}
+
+function auditStage(eventType: AuditEventType): number {
+  switch (eventType) {
+    case "conversation.message_ingested":
+      return 0;
+    case "knowledge.retrieved":
+      return 1;
+    case "agent.suggestion_generated":
+      return 2;
+    case "action.proposed":
+      return 3;
+    case "approval.approved":
+    case "approval.rejected":
+      return 4;
+    case "action.execution_started":
+      return 5;
+    case "action.execution_succeeded":
+    case "action.execution_blocked":
+      return 6;
+  }
+}
+
+function sameProposalIdentityAndPayload(
+  current: import("@commerce-copilot/domain").ActionProposal,
+  next: import("@commerce-copilot/domain").ActionProposal,
+): boolean {
+  return (
+    current.proposalId === next.proposalId &&
+    current.companyId === next.companyId &&
+    current.storeId === next.storeId &&
+    current.conversationId === next.conversationId &&
+    current.createdAt === next.createdAt &&
+    current.expiresAt === next.expiresAt &&
+    current.payload.kind === next.payload.kind &&
+    current.payload.orderId === next.payload.orderId &&
+    current.payload.reasonCode === next.payload.reasonCode &&
+    current.payload.observedOrderVersion === next.payload.observedOrderVersion &&
+    current.payload.observedOrderStatus === next.payload.observedOrderStatus &&
+    current.payload.amount.amountMinor === next.payload.amount.amountMinor &&
+    current.payload.amount.currency === next.payload.amount.currency &&
+    current.payload.observedRefundableAmount.amountMinor ===
+      next.payload.observedRefundableAmount.amountMinor &&
+    current.payload.observedRefundableAmount.currency ===
+      next.payload.observedRefundableAmount.currency
+  );
 }

@@ -100,7 +100,7 @@ function snapshotGroundedAction(
     draft.kind !== "after_sale.refund" ||
     draft.orderId !== order.orderId ||
     draft.reasonCode !== "damaged_item" ||
-    draft.observedOrderVersion !== String(order.version) ||
+    draft.observedOrderVersion !== order.version ||
     draft.observedOrderStatus !== order.status ||
     (order.status !== "paid" && order.status !== "shipped" && order.status !== "delivered") ||
     draft.amount.amountMinor !== order.refundable.amountMinor ||
@@ -116,7 +116,7 @@ function snapshotGroundedAction(
     orderId: order.orderId,
     amount: createMoney(order.refundable.amountMinor, order.refundable.currency),
     reasonCode: "damaged_item",
-    observedOrderVersion: String(order.version),
+    observedOrderVersion: order.version,
     observedOrderStatus: order.status,
     observedRefundableAmount: createMoney(order.refundable.amountMinor, order.refundable.currency),
   });

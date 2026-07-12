@@ -167,6 +167,7 @@ const actionProposalResponse = {
   schemaVersion: 1,
   proposal: {
     proposalId: "proposal-1",
+    version: 1,
     companyId: "company-1",
     storeId: "store-1",
     conversationId: "conversation-1",
@@ -348,6 +349,16 @@ describe("workspace schemas", () => {
 });
 
 describe("action schemas", () => {
+  it("requires a positive proposal version", () => {
+    expect(actionProposalResponseSchema.safeParse(actionProposalResponse).success).toBe(true);
+    expect(
+      actionProposalResponseSchema.safeParse({
+        ...actionProposalResponse,
+        proposal: { ...actionProposalResponse.proposal, version: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts only canonical proposal statuses", () => {
     expect(actionProposalStatusSchema.options).toEqual(ACTION_PROPOSAL_STATUSES);
 

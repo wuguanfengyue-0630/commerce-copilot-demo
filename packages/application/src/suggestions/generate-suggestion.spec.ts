@@ -95,7 +95,7 @@ function groundedResult(
       orderId,
       amount: createMoney(12_800, "CNY"),
       reasonCode: "damaged_item",
-      observedOrderVersion: "1",
+      observedOrderVersion: 1,
       observedOrderStatus: "delivered",
       observedRefundableAmount: createMoney(12_800, "CNY"),
     }),

@@ -54,8 +54,10 @@ export type ApprovalDecisionRecord = Readonly<{
   approvalDecisionId: string;
   companyId: CompanyId;
   proposalId: ProposalId;
+  proposalVersion: number;
   decision: "approved" | "rejected";
   actor: ApprovalActor;
+  comment?: string;
   correlationId: string;
   causationId: string;
   decidedAt: IsoTimestamp;
@@ -109,6 +111,7 @@ export interface SuggestionRepository {
 
 export interface ProposalRepository {
   save(context: OperationContext, proposal: ActionProposal): Promise<void>;
+  replace(context: OperationContext, next: ActionProposal, expectedVersion: number): Promise<void>;
   get(context: OperationContext, proposalId: ProposalId): Promise<ActionProposal | null>;
   listByConversation(
     context: OperationContext,
