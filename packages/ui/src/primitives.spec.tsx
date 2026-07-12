@@ -55,6 +55,13 @@ describe("design system primitives", () => {
     expect(command.querySelector("svg")).toBeInTheDocument();
   });
 
+  it.each(["", "   "])("rejects an empty destructive impact label", (impactLabel) => {
+    expect(() => render(<Button intent="danger" impactLabel={impactLabel} />)).toThrow(
+      "Danger Button requires a non-empty impactLabel",
+    );
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
   it.each([
     ["success", "已完成"],
     ["waiting", "等待处理"],
@@ -80,6 +87,21 @@ describe("design system primitives", () => {
     const loading = screen.getByRole("status", { name: "正在加载审批" });
     expect(loading).toHaveAttribute("aria-busy", "true");
     expect(loading.className).toContain("motion-reduce:animate-none");
+  });
+
+  it("supports decorative nested skeletons without duplicate loading announcements", () => {
+    const { container } = render(
+      <div role="status" aria-label="正在加载数据">
+        <Skeleton decorative />
+        <Skeleton decorative />
+      </div>,
+    );
+
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    for (const skeleton of container.querySelectorAll("[aria-hidden='true']")) {
+      expect(skeleton).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(container.querySelectorAll("[aria-hidden='true']")).toHaveLength(2);
   });
 
   it("supports an explicit badge icon without losing its label", () => {

@@ -50,6 +50,11 @@ export function Button({
   children,
   ...props
 }: ButtonProps) {
+  const commandLabel = impactLabel?.trim();
+  if (intent === "danger" && !commandLabel) {
+    throw new Error("Danger Button requires a non-empty impactLabel");
+  }
+
   return (
     <button
       type={type}
@@ -60,7 +65,7 @@ export function Button({
       {intent === "danger" ? (
         <>
           {Icon && <Icon aria-hidden="true" className="size-4 shrink-0" />}
-          <span>{impactLabel}</span>
+          <span>{commandLabel}</span>
         </>
       ) : (
         children

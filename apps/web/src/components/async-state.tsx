@@ -1,22 +1,25 @@
 import { Button, Skeleton } from "@commerce-copilot/ui";
 import { AlertCircle, Inbox } from "lucide-react";
 
-export interface AsyncStateProps {
-  state: "loading" | "error" | "empty";
-  onRetry?: () => void;
-}
+export type AsyncStateProps =
+  | { state: "error"; onRetry: () => void }
+  | { state: "loading" | "empty"; onRetry?: never };
 
-export function AsyncState({ state, onRetry }: AsyncStateProps) {
+export function AsyncState(props: AsyncStateProps) {
+  const { state } = props;
   if (state === "loading") {
     return (
-      <div role="status" aria-label="正在加载数据" className="space-y-3 py-4">
+      <div role="status" aria-live="polite" aria-label="正在加载数据" className="space-y-3 py-4">
         <span className="sr-only">正在加载数据</span>
-        <Skeleton className="w-2/3" />
-        <Skeleton className="w-1/2" />
+        <Skeleton decorative className="w-2/3" />
+        <Skeleton decorative className="w-1/2" />
       </div>
     );
   }
   if (state === "error") {
+    if (typeof props.onRetry !== "function") {
+      throw new Error("AsyncState error requires onRetry");
+    }
     return (
       <div
         role="alert"
@@ -26,7 +29,7 @@ export function AsyncState({ state, onRetry }: AsyncStateProps) {
           <AlertCircle aria-hidden="true" className="size-5 text-[var(--danger-text)]" />
           暂时无法加载数据，请重试。
         </span>
-        <Button intent="secondary" onClick={onRetry}>
+        <Button intent="secondary" onClick={props.onRetry}>
           重新加载
         </Button>
       </div>

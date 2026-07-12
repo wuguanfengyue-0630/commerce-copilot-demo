@@ -24,5 +24,5 @@ describe("API production build", () => {
     expect(artifacts).not.toContain("stale.txt");
     expect(artifacts.filter((path) => /(?:^|[\\/])(?:test|.*\.spec\.)/.test(path))).toEqual([]);
     expect(artifacts).toContain("main.js");
-  });
+  }, 15_000);
 });

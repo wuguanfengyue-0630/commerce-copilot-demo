@@ -1,3 +1,5 @@
+"use client";
+
 import {
   BookOpen,
   Bot,
@@ -9,6 +11,7 @@ import {
   Plug,
   Scale,
 } from "lucide-react";
+import { usePathname } from "next/navigation";
 
 export const navigationItems = [
   { label: "总览", href: "/", icon: Gauge },
@@ -23,19 +26,25 @@ export const navigationItems = [
 ] as const;
 
 export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
+  const pathname = usePathname();
   return (
     <nav aria-label="主导航" className="flex flex-col gap-1">
-      {navigationItems.map(({ label, href, icon: Icon }) => (
-        <a
-          key={label}
-          href={href}
-          onClick={onNavigate}
-          className="flex min-h-11 items-center gap-3 rounded-md px-3 text-sm font-medium text-[var(--text-muted)] hover:bg-[var(--surface-subtle)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
-        >
-          <Icon aria-hidden="true" className="size-5 shrink-0" />
-          <span className="min-w-0 truncate">{label}</span>
-        </a>
-      ))}
+      {navigationItems.map(({ label, href, icon: Icon }) => {
+        const active =
+          href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+        return (
+          <a
+            key={label}
+            href={href}
+            aria-current={active ? "page" : undefined}
+            onClick={onNavigate}
+            className={`flex min-h-11 items-center gap-3 rounded-md px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] ${active ? "bg-[var(--surface-subtle)] text-[var(--text)]" : "text-[var(--text-muted)] hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]"}`}
+          >
+            <Icon aria-hidden="true" className="size-5 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+          </a>
+        );
+      })}
     </nav>
   );
 }

@@ -5,6 +5,7 @@ interface Schema<T> {
 }
 
 interface ApiRequestOptions extends RequestInit {
+  baseUrl?: string;
   fetcher?: typeof fetch;
 }
 
@@ -23,19 +24,46 @@ export class ApiClientError extends Error {
 export async function apiRequest<T>(
   path: string,
   schema: Schema<T>,
-  { fetcher = fetch, ...init }: ApiRequestOptions = {},
+  { baseUrl, fetcher = fetch, ...init }: ApiRequestOptions = {},
 ): Promise<T> {
-  if (/^[a-z][a-z\d+.-]*:/i.test(path) || path.startsWith("//") || !path.startsWith("/api/v1/")) {
+  const browserOrigin =
+    typeof globalThis.location === "object" ? globalThis.location.origin : undefined;
+  if (baseUrl === undefined && browserOrigin === undefined) {
+    throw new ApiClientError("SSR 请求必须提供可信 baseUrl", "MISSING_API_BASE");
+  }
+
+  const trustedBase = new URL("/", baseUrl ?? browserOrigin);
+  const normalized = new URL(path, trustedBase);
+  if (
+    normalized.origin !== trustedBase.origin ||
+    normalized.username !== "" ||
+    normalized.password !== "" ||
+    normalized.hash !== "" ||
+    !normalized.pathname.startsWith("/api/v1/")
+  ) {
     throw new ApiClientError("仅允许访问同源 /api/v1/ 接口", "INVALID_API_PATH");
+  }
+
+  const headers = new Headers(init.headers);
+  if (!headers.has("accept")) {
+    headers.set("accept", "application/json");
   }
 
   let response: Response;
   try {
-    response = await fetcher(path, {
+    response = await fetcher(`${normalized.pathname}${normalized.search}`, {
       ...init,
-      headers: { accept: "application/json", ...init.headers },
+      headers,
     });
-  } catch {
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "AbortError"
+    ) {
+      throw error;
+    }
     throw new ApiClientError("暂时无法连接服务，请检查网络后重新加载。", "NETWORK_ERROR");
   }
 
