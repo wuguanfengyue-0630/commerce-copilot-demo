@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, Trash2 } from "lucide-react";
 import { describe, expect, it } from "vitest";
 
 import { Badge, Button, Card, Dialog, Skeleton } from "./index.ts";
@@ -14,7 +14,7 @@ describe("design system primitives", () => {
         title="退款审批"
         description="检查退款金额后再决定。"
       >
-        <Button intent="danger">批准退款 ¥128.00</Button>
+        <Button intent="danger" impactLabel="批准退款 ¥128.00" />
       </Dialog>,
     );
 
@@ -31,7 +31,7 @@ describe("design system primitives", () => {
       <>
         <Button>主要操作</Button>
         <Button intent="secondary">次要操作</Button>
-        <Button intent="danger">批准退款 ¥128.00</Button>
+        <Button intent="danger" impactLabel="批准退款 ¥128.00" />
       </>,
     );
 
@@ -43,6 +43,19 @@ describe("design system primitives", () => {
       expect(button.className).toContain("min-h-11");
       expect(button.className).toContain("focus-visible:");
     }
+  });
+
+  it("uses the explicit destructive impact as the visible command label", () => {
+    render(
+      <Button intent="danger" impactLabel="批准退款 ¥128.00">
+        <Trash2 aria-hidden="true" />
+      </Button>,
+    );
+
+    const command = screen.getByRole("button", { name: "批准退款 ¥128.00" });
+    expect(command).toBeEnabled();
+    expect(command).toHaveTextContent("批准退款 ¥128.00");
+    expect(command.querySelector("svg")).toBeInTheDocument();
   });
 
   it.each([

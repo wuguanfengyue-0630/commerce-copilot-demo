@@ -1,7 +1,18 @@
 import { workspaceResponseSchema } from "@commerce-copilot/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import { apiRewritesFor, developmentApiRewrite } from "../config/api-rewrites.ts";
 import { type ApiClientError, apiRequest } from "./client.ts";
+
+describe("Next API rewrites", () => {
+  it("proxies the API to the local service in development", () => {
+    expect(apiRewritesFor("development")).toEqual([developmentApiRewrite]);
+  });
+
+  it.each(["production", "test"])("does not expose the loopback proxy in %s", (environment) => {
+    expect(apiRewritesFor(environment)).toEqual([]);
+  });
+});
 
 describe("apiRequest", () => {
   it("rejects absolute cross-origin URLs before fetching", async () => {

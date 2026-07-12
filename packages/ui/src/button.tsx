@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, ReactElement, ReactNode } from "react";
 import { cn } from "./cn.ts";
 
 const buttonVariants = cva(
@@ -18,16 +18,43 @@ const buttonVariants = cva(
   },
 );
 
-export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
-  VariantProps<typeof buttonVariants>;
+type NativeButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children">;
+type StandardButtonIntent = Exclude<
+  NonNullable<VariantProps<typeof buttonVariants>["intent"]>,
+  "danger"
+>;
 
-export function Button({ className, intent = "primary", type = "button", ...props }: ButtonProps) {
+type StandardButtonProps = NativeButtonProps & {
+  intent?: StandardButtonIntent;
+  impactLabel?: never;
+  children?: ReactNode;
+};
+
+type DangerButtonProps = NativeButtonProps & {
+  intent: "danger";
+  impactLabel: string;
+  children?: ReactElement;
+};
+
+export type ButtonProps = StandardButtonProps | DangerButtonProps;
+
+export function Button({
+  className,
+  intent = "primary",
+  impactLabel,
+  type = "button",
+  children,
+  ...props
+}: ButtonProps) {
   return (
     <button
       type={type}
       className={cn(buttonVariants({ intent }), className)}
       data-intent={intent}
       {...props}
-    />
+    >
+      {children}
+      {intent === "danger" && <span>{impactLabel}</span>}
+    </button>
   );
 }
