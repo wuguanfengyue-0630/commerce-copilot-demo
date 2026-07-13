@@ -7,7 +7,7 @@
     "pnpm": "11.7.0"
   },
   "scripts": {
-    "dev": "pnpm --filter @commerce-copilot/api dev",
+    "dev": "pnpm --parallel --filter @commerce-copilot/api --filter @commerce-copilot/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
@@ -20,13 +20,14 @@
     "verify:workspace": "pnpm --filter @commerce-copilot/ui build && node --test scripts/verify-workspace.test.mjs && node scripts/verify-workspace.mjs && node scripts/verify-package-imports.mjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@biomejs/biome": "2.5.3",
+    "@playwright/test": "1.61.1",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",
-    "@vitejs/plugin-react": "6.0.3",
-    "@biomejs/biome": "2.5.3",
-    "@playwright/test": "1.61.1",
     "@types/node": "24.13.3",
+    "@vitejs/plugin-react": "6.0.3",
     "@vitest/coverage-v8": "4.1.10",
     "jsdom": "29.1.1",
     "typescript": "7.0.2",
