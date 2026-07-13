@@ -155,6 +155,28 @@ const detailWithProposal = {
   },
 } as const;
 
+const detailWithExecutedProposal = {
+  ...detailWithProposal,
+  conversation: {
+    ...detailWithProposal.conversation,
+    proposal: {
+      ...pendingProposal,
+      version: 4,
+      status: "executed",
+      approval: {
+        actor: { userId: "user-demo-supervisor", role: "supervisor" },
+        approvedAt: observedAt,
+      },
+      execution: {
+        status: "succeeded",
+        startedAt: observedAt,
+        executionId: "mock-execution-0001",
+        completedAt: observedAt,
+      },
+    },
+  },
+} as const;
+
 const knowledge = {
   schemaVersion: 1,
   policies: [
@@ -227,6 +249,7 @@ function installApi(scenario: Scenario = {}) {
       return take("detail");
     }
     if (path === "/api/v1/knowledge") return take("knowledge");
+    if (path === "/api/v1/demo/reset") return Promise.resolve(undefined);
     if (path.endsWith("/suggestions")) return take("suggestion");
     if (path === "/api/v1/demo/setup/complete") return take("completion");
     return Promise.reject(new Error(`Unexpected path: ${path}`));
@@ -434,6 +457,31 @@ describe("SetupWizard completion reconciliation", () => {
     await user.click(screen.getByRole("button", { name: "运行验收并完成设置" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("验收提案尚未确认");
     expect(callsTo("/api/v1/demo/setup/complete")).toHaveLength(0);
+  });
+
+  it("resets a completed shared demo before rerunning setup acceptance", async () => {
+    installApi({
+      detail: [conversationDetail, detailWithExecutedProposal],
+      suggestion: [
+        new ApiClientError(
+          "The shared demo command was already processed.",
+          "GENERATE_SUGGESTION_DUPLICATE_COMMAND",
+        ),
+        suggestionResponse,
+      ],
+    });
+    const user = userEvent.setup();
+    renderWizard();
+    await reachFinalStep(user);
+
+    await user.click(screen.getByRole("button", { name: "运行验收并完成设置" }));
+
+    expect(await screen.findByText("模拟环境已就绪，不代表已获得飞鸽消息权限")).toBeVisible();
+    expect(callsTo("/api/v1/demo/reset")).toHaveLength(1);
+    expect(
+      callsTo(`/api/v1/conversations/${conversationSummary.conversationId}/suggestions`),
+    ).toHaveLength(2);
+    expect(callsTo("/api/v1/demo/setup/complete")).toHaveLength(1);
   });
 
   it("completes directly when refresh finds an existing pending proposal", async () => {

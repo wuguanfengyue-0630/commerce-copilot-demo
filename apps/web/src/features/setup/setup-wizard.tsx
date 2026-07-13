@@ -28,6 +28,7 @@ import {
   generateDemoSuggestion,
   getConversationDetail,
   knowledgeQueryOptions,
+  resetDemoState,
   workspaceQueryOptions,
 } from "../../api/queries.ts";
 
@@ -163,8 +164,7 @@ export function SetupWizard() {
     const cached = queryClient.getQueryData<ConversationDetailResponse>(detailKey);
     if (hasPendingProposal(cached)) return;
 
-    try {
-      const result = await generateDemoSuggestion(id);
+    function cachePendingSuggestion(result: SuggestionResponse) {
       if (!hasPendingSuggestion(result)) {
         throw new SetupFlowError("验收提案尚未确认，请重新运行验收。");
       }
@@ -181,6 +181,11 @@ export function SetupWizard() {
             }
           : current,
       );
+    }
+
+    try {
+      const result = await generateDemoSuggestion(id);
+      cachePendingSuggestion(result);
     } catch (error) {
       if (error instanceof SetupFlowError) throw error;
       if (
@@ -191,8 +196,16 @@ export function SetupWizard() {
       }
       const reconciled = await getConversationDetail(id);
       queryClient.setQueryData(detailKey, reconciled);
-      if (!hasPendingProposal(reconciled)) {
+      if (hasPendingProposal(reconciled)) return;
+      if (reconciled.conversation.proposal === null) {
         throw new SetupFlowError("验收提案尚未确认，请重新运行验收。");
+      }
+      try {
+        await resetDemoState();
+        cachePendingSuggestion(await generateDemoSuggestion(id));
+      } catch (recoveryError) {
+        if (recoveryError instanceof SetupFlowError) throw recoveryError;
+        throw new SetupFlowError("共享演示状态恢复失败，请重试完成设置。");
       }
     }
   }

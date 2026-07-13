@@ -97,6 +97,23 @@ describe("apiRequest", () => {
     );
   });
 
+  it("accepts a successful no-content command response", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }));
+
+    await expect(
+      apiRequest(
+        "/api/v1/demo/reset",
+        {
+          safeParse: (value) =>
+            value === undefined
+              ? { success: true as const, data: undefined }
+              : { success: false as const },
+        },
+        { baseUrl, fetcher, method: "POST" },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it.each([
     { "content-type": "application/json", "x-trace-id": "object" },
     new Headers({ "content-type": "application/json", "x-trace-id": "headers" }),

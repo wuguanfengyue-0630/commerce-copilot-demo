@@ -15,6 +15,11 @@ import { queryOptions } from "@tanstack/react-query";
 
 import { apiRequest } from "./client.ts";
 
+const noContentSchema = {
+  safeParse: (value: unknown) =>
+    value === undefined ? { success: true as const, data: undefined } : { success: false as const },
+};
+
 export const apiQueryKeys = {
   demoBootstrap: ["demo", "bootstrap"] as const,
   workspace: ["workspace"] as const,
@@ -96,6 +101,10 @@ export function completeDemoSetup() {
   return apiRequest("/api/v1/demo/setup/complete", demoSetupCompleteResponseSchema, {
     method: "POST",
   });
+}
+
+export function resetDemoState() {
+  return apiRequest("/api/v1/demo/reset", noContentSchema, { method: "POST" });
 }
 
 export function decideDemoApproval(proposalId: string, proposalVersion: number) {

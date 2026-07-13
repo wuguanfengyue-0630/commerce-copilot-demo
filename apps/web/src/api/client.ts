@@ -71,10 +71,14 @@ export async function apiRequest<T>(
   }
 
   let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new ApiClientError("服务返回的数据无法使用，请重新加载。", "INVALID_RESPONSE");
+  if (response.status === 204) {
+    body = undefined;
+  } else {
+    try {
+      body = await response.json();
+    } catch {
+      throw new ApiClientError("服务返回的数据无法使用，请重新加载。", "INVALID_RESPONSE");
+    }
   }
 
   if (!response.ok) {
