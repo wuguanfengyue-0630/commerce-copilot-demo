@@ -56,9 +56,9 @@ export function OverviewView() {
         </h2>
         <dl className="grid border-y border-[var(--border)] sm:grid-cols-2 lg:grid-cols-5 lg:divide-x lg:divide-[var(--border)]">
           {[
-            ["咨询量", String(metrics.openConversations)],
-            ["响应", String(metrics.assistantSuggestions)],
-            ["解决 / 转人工", `-- / ${metrics.waitingForAgent}`],
+            ["开放会话", String(metrics.openConversations)],
+            ["助手建议", String(metrics.assistantSuggestions)],
+            ["等待人工", String(metrics.waitingForAgent)],
             ["待审批", String(approvals.data.pending.length)],
             ["接口健康", `${availableCount} 可用 / ${waitingCount} 等待`],
           ].map(([label, value]) => (

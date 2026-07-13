@@ -125,11 +125,12 @@ describe("OverviewView", () => {
       "/api/v1/approvals",
     ]);
     expect(screen.getByText("当前没有待审批操作")).toBeVisible();
-    expect(screen.getByText("咨询量").nextSibling).toHaveTextContent("1");
-    expect(screen.getByText("响应").nextSibling).toHaveTextContent("1");
-    expect(screen.getByText("解决 / 转人工").nextSibling).toHaveTextContent("-- / 1");
+    expect(screen.getByText("开放会话").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("助手建议").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("等待人工").nextSibling).toHaveTextContent("1");
     expect(screen.getByText("待审批").nextSibling).toHaveTextContent("0");
     expect(screen.getByText("接口健康").nextSibling).toHaveTextContent("2 可用 / 2 等待");
+    expect(screen.queryByText(/解决/)).not.toBeInTheDocument();
   });
 
   it("marks pending approvals as needing human attention", async () => {

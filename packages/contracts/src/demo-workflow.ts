@@ -184,11 +184,6 @@ const demoActiveRuleSchema = z.strictObject({
   requiresApproval: z.literal(true),
   requiredRole: z.literal("supervisor"),
 });
-const demoSetupSchema = z.strictObject({
-  status: z.enum(["incomplete", "complete"]),
-  acceptedAt: isoDateTimeSchema.nullable(),
-});
-
 const demoIncompleteSetupSchema = z.strictObject({
   status: z.literal("incomplete"),
   acceptedAt: z.null(),
@@ -199,6 +194,11 @@ const demoCompleteSetupSchema = z.strictObject({
   acceptedAt: isoDateTimeSchema,
 });
 
+export const demoSetupStateSchema = z.discriminatedUnion("status", [
+  demoIncompleteSetupSchema,
+  demoCompleteSetupSchema,
+]);
+
 export const demoBootstrapResponseSchema = z.strictObject({
   schemaVersion: schemaVersionSchema,
   actor: z.strictObject({
@@ -206,7 +206,7 @@ export const demoBootstrapResponseSchema = z.strictObject({
     displayName: nonBlankStringSchema,
     role: z.literal("owner"),
   }),
-  setup: z.union([demoIncompleteSetupSchema, demoCompleteSetupSchema]),
+  setup: demoSetupStateSchema,
   store: z.strictObject({
     companyId: identifierSchema,
     storeId: identifierSchema,
@@ -238,7 +238,7 @@ export const workspaceResponseSchema = z.strictObject({
       status: z.literal("ready"),
       score: z.number().min(0).max(1),
     }),
-    setup: demoSetupSchema,
+    setup: demoSetupStateSchema,
   }),
 });
 
@@ -347,6 +347,7 @@ export type ApprovalDecisionRequest = z.infer<typeof approvalDecisionRequestSche
 export type DemoDecision = z.infer<typeof demoDecisionSchema>;
 export type DemoBootstrapResponse = z.infer<typeof demoBootstrapResponseSchema>;
 export type DemoSetupCompleteResponse = z.infer<typeof demoSetupCompleteResponseSchema>;
+export type DemoSetupState = z.infer<typeof demoSetupStateSchema>;
 export type WorkspaceResponse = z.infer<typeof workspaceResponseSchema>;
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>;
 export type ConversationDetail = z.infer<typeof conversationDetailSchema>;

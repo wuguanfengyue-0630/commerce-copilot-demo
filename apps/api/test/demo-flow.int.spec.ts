@@ -450,7 +450,10 @@ describe("typed demo workflow API", () => {
       "status",
       "score",
     ]);
-    expectRequired(requiredObject(workspaceModel, "setup"), ["status", "acceptedAt"]);
+    const setup = requiredObject(workspaceModel, "setup");
+    expect(setup.oneOf).toHaveLength(2);
+    expectRequired(oneOfStatus(setup, "incomplete"), ["status", "acceptedAt"]);
+    expectRequired(oneOfStatus(setup, "complete"), ["status", "acceptedAt"]);
 
     const detailSchema = responseSchema(
       document,

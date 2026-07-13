@@ -1,38 +1,86 @@
 "use client";
 
+import type {
+  ConversationDetailResponse,
+  DemoBootstrapResponse,
+  SuggestionResponse,
+  WorkspaceResponse,
+} from "@commerce-copilot/contracts";
 import { Button } from "@commerce-copilot/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CheckCircle2, LoaderCircle, RotateCcw } from "lucide-react";
-import { useState } from "react";
-import { apiQueryKeys, completeDemoSetup, demoBootstrapQueryOptions } from "../../api/queries.ts";
-import { AsyncState } from "../../components/async-state.tsx";
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  Clock3,
+  LoaderCircle,
+  RotateCcw,
+} from "lucide-react";
+import { type ReactNode, useRef, useState } from "react";
+import { ApiClientError } from "../../api/client.ts";
+import {
+  apiQueryKeys,
+  completeDemoSetup,
+  conversationDetailQueryOptions,
+  conversationsQueryOptions,
+  demoBootstrapQueryOptions,
+  generateDemoSuggestion,
+  getConversationDetail,
+  knowledgeQueryOptions,
+  workspaceQueryOptions,
+} from "../../api/queries.ts";
 
 const steps = [
   {
     title: "管理员演示身份",
-    description: "以演示店主身份进入客服主管工作区。",
+    description: "验证当前演示管理员与客服主管工作区身份。",
   },
   {
     title: "确定性演示模型",
-    description: "使用固定输入与输出的演示模型，保证验收结果可复现。",
+    description: "验证确定性模型与破损退款评测已经就绪。",
   },
   {
     title: "模拟抖音店铺",
-    description: "连接抖音电商演示店，仅使用本地模拟数据。",
+    description: "确认当前店铺来自抖音电商模拟平台。",
   },
   {
     title: "同步夹具",
-    description: "准备订单、会话和售后所需的确定性夹具。",
+    description: "核对验收会话、消息和订单夹具已经同步。",
   },
   {
     title: "发布破损退款政策",
-    description: "启用需要主管审批的破损商品退款规则。",
+    description: "核对唯一发布的破损商品退款政策与版本。",
   },
   {
     title: "运行验收对话",
-    description: "验证建议、审批和模拟退款链路可以完整运行。",
+    description: "生成确定性建议与待审批退款提案，再接受演示设置。",
   },
 ] as const;
+
+type StepFact = Readonly<{
+  ready: boolean;
+  state: "loading" | "error" | "ready" | "waiting";
+  status: string;
+  details?: ReactNode;
+  retry?: () => void;
+}>;
+
+class SetupFlowError extends Error {}
+
+function hasPendingProposal(data: ConversationDetailResponse | undefined): boolean {
+  return (
+    data?.conversation.latestSuggestion?.disposition === "propose_action" &&
+    data.conversation.proposal?.status === "pending_approval"
+  );
+}
+
+function hasPendingSuggestion(result: SuggestionResponse): boolean {
+  return (
+    result.suggestion.disposition === "propose_action" &&
+    result.proposal?.status === "pending_approval"
+  );
+}
 
 function CompletedSetup() {
   return (
@@ -55,32 +103,332 @@ function CompletedSetup() {
   );
 }
 
+function FactStatus({ fact }: { fact: StepFact }) {
+  if (fact.state === "loading") {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="mt-7 flex items-center gap-2 text-sm text-[var(--text-muted)]"
+      >
+        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        {fact.status}
+      </div>
+    );
+  }
+  if (fact.state === "error") {
+    return (
+      <div role="alert" className="mt-7 space-y-3 text-sm text-[var(--danger-text)]">
+        <div className="flex items-center gap-2">
+          <AlertCircle aria-hidden="true" className="size-5 shrink-0" />
+          {fact.status}
+        </div>
+        <Button intent="secondary" onClick={fact.retry}>
+          <RotateCcw aria-hidden="true" className="size-4" />
+          重试验证
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-7 space-y-4 text-sm">
+      <div
+        className={`flex items-center gap-2 font-medium ${fact.state === "ready" ? "text-[var(--success-text)]" : "text-[var(--warning-text)]"}`}
+      >
+        {fact.state === "ready" ? (
+          <CheckCircle2 aria-hidden="true" className="size-5 shrink-0" />
+        ) : (
+          <Clock3 aria-hidden="true" className="size-5 shrink-0" />
+        )}
+        {fact.status}
+      </div>
+      {fact.details}
+    </div>
+  );
+}
+
 export function SetupWizard() {
   const [stepIndex, setStepIndex] = useState(0);
+  const submitting = useRef(false);
   const queryClient = useQueryClient();
   const bootstrap = useQuery(demoBootstrapQueryOptions());
+  const workspace = useQuery(workspaceQueryOptions());
+  const conversations = useQuery(conversationsQueryOptions());
+  const conversationId = conversations.data?.conversations[0]?.conversationId;
+  const detail = useQuery(conversationDetailQueryOptions(conversationId));
+  const knowledge = useQuery(knowledgeQueryOptions());
+
+  async function ensurePendingProposal(id: string): Promise<void> {
+    const detailKey = apiQueryKeys.conversationDetail(id);
+    const cached = queryClient.getQueryData<ConversationDetailResponse>(detailKey);
+    if (hasPendingProposal(cached)) return;
+
+    try {
+      const result = await generateDemoSuggestion(id);
+      if (!hasPendingSuggestion(result)) {
+        throw new SetupFlowError("验收提案尚未确认，请重新运行验收。");
+      }
+      queryClient.setQueryData<ConversationDetailResponse>(detailKey, (current) =>
+        current
+          ? {
+              ...current,
+              conversation: {
+                ...current.conversation,
+                latestSuggestion: result.suggestion,
+                proposal: result.proposal,
+                citations: result.suggestion.citations,
+              },
+            }
+          : current,
+      );
+    } catch (error) {
+      if (error instanceof SetupFlowError) throw error;
+      if (
+        !(error instanceof ApiClientError) ||
+        error.code !== "GENERATE_SUGGESTION_DUPLICATE_COMMAND"
+      ) {
+        throw new SetupFlowError("验收对话运行失败，请检查服务后重试。");
+      }
+      const reconciled = await getConversationDetail(id);
+      queryClient.setQueryData(detailKey, reconciled);
+      if (!hasPendingProposal(reconciled)) {
+        throw new SetupFlowError("验收提案尚未确认，请重新运行验收。");
+      }
+    }
+  }
+
   const completion = useMutation({
-    mutationFn: completeDemoSetup,
+    mutationFn: async () => {
+      if (conversationId === undefined) {
+        throw new SetupFlowError("验收会话尚未就绪，请先重试验证。");
+      }
+      await ensurePendingProposal(conversationId);
+      return completeDemoSetup();
+    },
     onSuccess: (result) => {
-      queryClient.setQueryData(apiQueryKeys.demoBootstrap, (current: typeof bootstrap.data) =>
+      queryClient.setQueryData<DemoBootstrapResponse>(apiQueryKeys.demoBootstrap, (current) =>
         current ? { ...current, setup: result.setup } : current,
       );
+      queryClient.setQueryData<WorkspaceResponse>(apiQueryKeys.workspace, (current) =>
+        current
+          ? { ...current, workspace: { ...current.workspace, setup: result.setup } }
+          : current,
+      );
+      void queryClient.invalidateQueries({
+        queryKey: apiQueryKeys.approvals,
+        refetchType: "none",
+      });
+      void queryClient.invalidateQueries({
+        queryKey: apiQueryKeys.conversations,
+        refetchType: "none",
+      });
+      void queryClient.invalidateQueries({
+        queryKey: apiQueryKeys.knowledge,
+        refetchType: "none",
+      });
+    },
+    onSettled: () => {
+      submitting.current = false;
     },
   });
 
-  if (bootstrap.isPending) {
-    return <AsyncState state="loading" />;
-  }
-  if (bootstrap.isError) {
-    return <AsyncState state="error" onRetry={() => void bootstrap.refetch()} />;
-  }
-  if (bootstrap.data.setup.acceptedAt !== null || completion.isSuccess) {
+  if (bootstrap.data?.setup.acceptedAt !== null && bootstrap.data?.setup.acceptedAt !== undefined) {
     return <CompletedSetup />;
+  }
+  if (completion.isSuccess) {
+    return <CompletedSetup />;
+  }
+
+  const retryBootstrap = () => void bootstrap.refetch();
+  const retryWorkspace = () => void workspace.refetch();
+  const retryConversations = () => {
+    void conversations.refetch();
+    if (conversationId !== undefined) void detail.refetch();
+  };
+  const retryKnowledge = () => void knowledge.refetch();
+  const retryDetail = () => void detail.refetch();
+
+  let fact: StepFact;
+  switch (stepIndex) {
+    case 0:
+      fact = bootstrap.isPending
+        ? { ready: false, state: "loading", status: "正在验证管理员演示身份" }
+        : bootstrap.isError || bootstrap.data.actor.role !== "owner"
+          ? {
+              ready: false,
+              state: "error",
+              status: "管理员身份验证失败，请重新加载身份信息。",
+              retry: retryBootstrap,
+            }
+          : {
+              ready: true,
+              state: "ready",
+              status: "管理员身份已验证",
+              details: (
+                <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
+                  <dt className="text-[var(--text-muted)]">演示管理员</dt>
+                  <dd>{bootstrap.data.actor.displayName}</dd>
+                  <dt className="text-[var(--text-muted)]">工作区身份</dt>
+                  <dd>店铺负责人 / 客服主管</dd>
+                </dl>
+              ),
+            };
+      break;
+    case 1:
+      fact = workspace.isPending
+        ? { ready: false, state: "loading", status: "正在验证确定性演示模型" }
+        : workspace.isError ||
+            !workspace.data.workspace.demoModel.deterministic ||
+            workspace.data.workspace.evaluationSummary.status !== "ready"
+          ? {
+              ready: false,
+              state: "error",
+              status: "确定性模型验证失败，请重新加载模型状态。",
+              retry: retryWorkspace,
+            }
+          : {
+              ready: true,
+              state: "ready",
+              status: "确定性模型与评测已就绪",
+              details: (
+                <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
+                  <dt className="text-[var(--text-muted)]">模型</dt>
+                  <dd>{workspace.data.workspace.demoModel.provider}</dd>
+                  <dt className="text-[var(--text-muted)]">破损退款评测</dt>
+                  <dd>{workspace.data.workspace.evaluationSummary.score * 100}%</dd>
+                </dl>
+              ),
+            };
+      break;
+    case 2:
+      fact = bootstrap.isPending
+        ? { ready: false, state: "loading", status: "正在验证模拟抖音店铺" }
+        : bootstrap.isError || bootstrap.data.store.platform !== "douyin"
+          ? {
+              ready: false,
+              state: "error",
+              status: "模拟店铺验证失败，请重新加载店铺信息。",
+              retry: retryBootstrap,
+            }
+          : {
+              ready: true,
+              state: "ready",
+              status: "模拟抖音店铺已识别",
+              details: (
+                <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
+                  <dt className="text-[var(--text-muted)]">店铺</dt>
+                  <dd>{bootstrap.data.store.displayName}</dd>
+                  <dt className="text-[var(--text-muted)]">店铺 ID</dt>
+                  <dd>{bootstrap.data.store.storeId}</dd>
+                </dl>
+              ),
+            };
+      break;
+    case 3: {
+      const empty = conversations.data?.conversations.length === 0;
+      const invalidDetail =
+        detail.data !== undefined &&
+        (detail.data.conversation.messages.length === 0 || !detail.data.conversation.order.orderId);
+      fact =
+        conversations.isPending || (conversationId !== undefined && detail.isPending)
+          ? { ready: false, state: "loading", status: "正在验证会话与订单夹具" }
+          : conversations.isError || detail.isError || empty || invalidDetail
+            ? {
+                ready: false,
+                state: "error",
+                status: "会话与订单夹具验证失败，请重新同步。",
+                retry: retryConversations,
+              }
+            : {
+                ready: detail.data !== undefined,
+                state: detail.data === undefined ? "loading" : "ready",
+                status:
+                  detail.data === undefined ? "正在验证会话与订单夹具" : "会话与订单夹具已同步",
+                details: detail.data && (
+                  <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
+                    <dt className="text-[var(--text-muted)]">验收会话</dt>
+                    <dd>{detail.data.conversation.conversationId}</dd>
+                    <dt className="text-[var(--text-muted)]">订单</dt>
+                    <dd>{detail.data.conversation.order.orderId}</dd>
+                  </dl>
+                ),
+              };
+      break;
+    }
+    case 4: {
+      const policy = knowledge.data?.policies[0];
+      fact = knowledge.isPending
+        ? { ready: false, state: "loading", status: "正在验证破损退款政策" }
+        : knowledge.isError || knowledge.data.policies.length !== 1 || policy === undefined
+          ? {
+              ready: false,
+              state: "error",
+              status: "退款政策验证失败，请重新加载发布版本。",
+              retry: retryKnowledge,
+            }
+          : {
+              ready: true,
+              state: "ready",
+              status: "破损退款政策已发布",
+              details: (
+                <dl className="grid gap-2 sm:grid-cols-[9rem_1fr]">
+                  <dt className="text-[var(--text-muted)]">政策</dt>
+                  <dd>{policy.title}</dd>
+                  <dt className="text-[var(--text-muted)]">发布版本</dt>
+                  <dd>发布版本 {policy.release.version}</dd>
+                </dl>
+              ),
+            };
+      break;
+    }
+    default:
+      fact = detail.isPending
+        ? { ready: false, state: "loading", status: "正在检查验收对话状态" }
+        : detail.isError || detail.data === undefined
+          ? {
+              ready: false,
+              state: "error",
+              status: "验收对话状态验证失败，请重新加载。",
+              retry: retryDetail,
+            }
+          : hasPendingProposal(detail.data)
+            ? {
+                ready: true,
+                state: "ready",
+                status: "待审批退款提案已就绪",
+                details: (
+                  <p className="text-[var(--text-muted)]">
+                    {detail.data.conversation.proposal?.proposalId}
+                  </p>
+                ),
+              }
+            : {
+                ready: true,
+                state: "waiting",
+                status: "验收对话待运行",
+                details: (
+                  <p className="text-[var(--text-muted)]">
+                    将为 {detail.data.conversation.order.orderId} 生成建议与待审批提案。
+                  </p>
+                ),
+              };
   }
 
   const step = steps[stepIndex] ?? steps[0];
   const isLast = stepIndex === steps.length - 1;
   const busy = completion.isPending;
+  const existingProposal = hasPendingProposal(detail.data);
+
+  function submitCompletion() {
+    if (submitting.current || completion.isPending || !fact.ready) return;
+    submitting.current = true;
+    completion.mutate();
+  }
+
+  const completionError =
+    completion.error instanceof SetupFlowError
+      ? completion.error.message
+      : "设置未能保存，请检查服务后重试。";
 
   return (
     <div className="mx-auto w-full max-w-3xl py-4 sm:py-8">
@@ -111,31 +459,23 @@ export function SetupWizard() {
 
       <section
         aria-labelledby="setup-step-heading"
-        className="min-h-64 border-y border-[var(--border)] py-8"
+        className="min-h-72 border-y border-[var(--border)] py-8"
       >
         <p className="text-xs font-medium text-[var(--text-muted)]">Commerce Copilot 演示配置</p>
         <h1 id="setup-step-heading" className="mt-3 text-xl font-semibold">
           {step.title}
         </h1>
         <p className="mt-3 max-w-2xl text-sm text-[var(--text-muted)]">{step.description}</p>
-        <dl className="mt-7 grid gap-3 text-sm sm:grid-cols-[9rem_1fr]">
-          <dt className="text-[var(--text-muted)]">当前店铺</dt>
-          <dd>{bootstrap.data.store.displayName}</dd>
-          <dt className="text-[var(--text-muted)]">演示身份</dt>
-          <dd>{bootstrap.data.actor.displayName}</dd>
-        </dl>
+        <FactStatus fact={fact} />
       </section>
 
       {completion.isError && (
         <div
           role="alert"
-          className="mt-5 flex flex-wrap items-center gap-3 text-sm text-[var(--danger-text)]"
+          className="mt-5 flex items-center gap-2 text-sm text-[var(--danger-text)]"
         >
-          <span>设置未能保存，请检查服务后重试。</span>
-          <Button intent="secondary" onClick={() => completion.mutate()}>
-            <RotateCcw aria-hidden="true" className="size-4" />
-            重试完成设置
-          </Button>
+          <AlertCircle aria-hidden="true" className="size-5 shrink-0" />
+          {completionError}
         </div>
       )}
 
@@ -146,7 +486,7 @@ export function SetupWizard() {
           className="mt-5 flex items-center gap-2 text-sm text-[var(--text-muted)]"
         >
           <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-          正在保存设置
+          正在保存验收结果
         </div>
       )}
 
@@ -160,21 +500,32 @@ export function SetupWizard() {
           上一步
         </Button>
         {isLast ? (
-          <Button disabled={busy} onClick={() => completion.mutate()}>
+          <Button disabled={!fact.ready || busy} onClick={submitCompletion}>
             {busy ? (
               <>
                 <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-                正在完成
+                正在运行验收
+              </>
+            ) : completion.isError ? (
+              <>
+                <RotateCcw aria-hidden="true" className="size-4" />
+                重试完成设置
+              </>
+            ) : existingProposal ? (
+              <>
+                <CheckCircle2 aria-hidden="true" className="size-4" />
+                完成设置
               </>
             ) : (
               <>
                 <CheckCircle2 aria-hidden="true" className="size-4" />
-                完成设置
+                运行验收并完成设置
               </>
             )}
           </Button>
         ) : (
           <Button
+            disabled={!fact.ready || busy}
             onClick={() => setStepIndex((current) => Math.min(steps.length - 1, current + 1))}
           >
             下一步
