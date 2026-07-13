@@ -1,9 +1,12 @@
 import {
+  approvalDecisionResponseSchema,
   approvalsResponseSchema,
+  auditEventsResponseSchema,
   conversationDetailResponseSchema,
   conversationListResponseSchema,
   demoBootstrapResponseSchema,
   demoSetupCompleteResponseSchema,
+  executionResponseSchema,
   knowledgeResponseSchema,
   suggestionResponseSchema,
   workspaceResponseSchema,
@@ -20,6 +23,7 @@ export const apiQueryKeys = {
   conversationDetail: (conversationId: string) =>
     ["conversations", "detail", conversationId] as const,
   knowledge: ["knowledge"] as const,
+  audit: (conversationId: string) => ["audit", conversationId] as const,
 };
 
 export function demoBootstrapQueryOptions() {
@@ -91,5 +95,37 @@ export function generateDemoSuggestion(conversationId: string) {
 export function completeDemoSetup() {
   return apiRequest("/api/v1/demo/setup/complete", demoSetupCompleteResponseSchema, {
     method: "POST",
+  });
+}
+
+export function decideDemoApproval(proposalId: string, proposalVersion: number) {
+  return apiRequest(
+    `/api/v1/approvals/${encodeURIComponent(proposalId)}/decisions`,
+    approvalDecisionResponseSchema,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ outcome: "approved", proposalVersion }),
+    },
+  );
+}
+
+export function executeDemoProposal(proposalId: string) {
+  return apiRequest(
+    `/api/v1/actions/${encodeURIComponent(proposalId)}/execute`,
+    executionResponseSchema,
+    { method: "POST" },
+  );
+}
+
+export function auditEventsQueryOptions(conversationId: string | undefined) {
+  return queryOptions({
+    queryKey: apiQueryKeys.audit(conversationId ?? "pending"),
+    enabled: conversationId !== undefined,
+    queryFn: ({ signal }) => {
+      if (conversationId === undefined) throw new Error("Audit events require a conversation id");
+      const query = new URLSearchParams({ conversationId });
+      return apiRequest(`/api/v1/audit-events?${query}`, auditEventsResponseSchema, { signal });
+    },
   });
 }
