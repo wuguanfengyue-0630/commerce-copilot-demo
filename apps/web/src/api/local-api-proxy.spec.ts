@@ -67,6 +67,7 @@ describe("proxyLocalDemoApi", () => {
     await proxyLocalDemoApi(
       new Request("https://demo.example/api/v1/conversations/conversation-1/suggestions", {
         method: "POST",
+        body: new Uint8Array(),
       }),
       ["conversations", "conversation-1", "suggestions"],
       fetcher,

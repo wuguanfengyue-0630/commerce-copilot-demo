@@ -12,10 +12,11 @@ export async function proxyLocalDemoApi(
   const headers = new Headers({ accept: "application/json" });
   const contentType = request.headers.get("content-type");
   if (contentType !== null) headers.set("content-type", contentType);
-  const body =
-    request.method === "GET" || request.method === "HEAD" || request.body === null
-      ? undefined
-      : await request.text();
+  let body: string | undefined;
+  if (request.method !== "GET" && request.method !== "HEAD" && request.body !== null) {
+    const requestText = await request.text();
+    body = requestText === "" && contentType === null ? undefined : requestText;
+  }
 
   const upstream = await fetcher(target, {
     method: request.method,
