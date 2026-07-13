@@ -473,4 +473,22 @@ describe("SetupWizard completion reconciliation", () => {
         ?.isInvalidated,
     ).toBe(true);
   });
+
+  it("invalidates stale workspace metrics after the acceptance suggestion changes runtime state", async () => {
+    installApi({ detail: [conversationDetail] });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    client.setQueryData(apiQueryKeys.workspace, workspace);
+    const user = userEvent.setup();
+    renderWizard(client);
+    await reachFinalStep(user);
+    await user.click(screen.getByRole("button", { name: "运行验收并完成设置" }));
+    await screen.findByText("模拟环境已就绪，不代表已获得飞鸽消息权限");
+
+    expect(
+      client.getQueryData<typeof workspace>(apiQueryKeys.workspace)?.workspace.metrics,
+    ).toEqual(workspace.workspace.metrics);
+    expect(client.getQueryState(apiQueryKeys.workspace)?.isInvalidated).toBe(true);
+  });
 });

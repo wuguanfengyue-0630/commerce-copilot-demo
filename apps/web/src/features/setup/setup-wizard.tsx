@@ -215,6 +215,10 @@ export function SetupWizard() {
           : current,
       );
       void queryClient.invalidateQueries({
+        queryKey: apiQueryKeys.workspace,
+        refetchType: "none",
+      });
+      void queryClient.invalidateQueries({
         queryKey: apiQueryKeys.approvals,
         refetchType: "none",
       });
