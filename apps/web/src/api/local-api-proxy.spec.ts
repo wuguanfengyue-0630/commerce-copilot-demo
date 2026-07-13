@@ -55,4 +55,24 @@ describe("proxyLocalDemoApi", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(response.status).toBe(201);
   });
+
+  it("preserves a bodyless POST for empty command endpoints", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ status: "accepted" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await proxyLocalDemoApi(
+      new Request("https://demo.example/api/v1/conversations/conversation-1/suggestions", {
+        method: "POST",
+      }),
+      ["conversations", "conversation-1", "suggestions"],
+      fetcher,
+    );
+
+    const [, init] = fetcher.mock.calls[0] ?? [];
+    expect(init).not.toHaveProperty("body");
+  });
 });

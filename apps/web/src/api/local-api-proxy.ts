@@ -13,7 +13,9 @@ export async function proxyLocalDemoApi(
   const contentType = request.headers.get("content-type");
   if (contentType !== null) headers.set("content-type", contentType);
   const body =
-    request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
+    request.method === "GET" || request.method === "HEAD" || request.body === null
+      ? undefined
+      : await request.text();
 
   const upstream = await fetcher(target, {
     method: request.method,
