@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter @commerce-copilot/api --filter @commerce-copilot/web dev",
+    "start:public": "node scripts/start-public-demo.mjs",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
