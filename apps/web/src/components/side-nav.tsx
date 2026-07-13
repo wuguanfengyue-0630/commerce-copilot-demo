@@ -15,7 +15,7 @@ import { usePathname } from "next/navigation";
 
 export const navigationItems = [
   { label: "总览", href: "/overview", icon: Gauge },
-  { label: "统一会话", href: "/conversations", icon: MessagesSquare },
+  { label: "统一会话", href: "/workspace", icon: MessagesSquare },
   { label: "审批中心", href: "/approvals", icon: ClipboardCheck },
   { label: "知识库", href: "/knowledge", icon: BookOpen },
   { label: "平台接入", href: "/integrations", icon: Plug },
